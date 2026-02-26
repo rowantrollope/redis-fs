@@ -4,6 +4,8 @@ A native Redis module that implements a POSIX-like virtual filesystem as a custo
 
 **One Redis key = one filesystem.** Internally a flat hashmap of absolute paths to inodes — each storing type (file/dir/symlink), POSIX metadata, and inline content. Think `RedisJSON` but for filesystems.
 
+Commands are named after their Unix counterparts: `FS.CAT`, `FS.LS`, `FS.MKDIR`, `FS.GREP`, etc.
+
 ## Building
 
 ```bash
@@ -19,11 +21,11 @@ redis-server --loadmodule ./fs.so
 ## Quick Start
 
 ```
-> FS.INIT myfs
+> FS.MKFS myfs
 OK
-> FS.WRITE myfs /hello.txt "Hello, World!"
+> FS.ECHO myfs /hello.txt "Hello, World!"
 OK
-> FS.READ myfs /hello.txt
+> FS.CAT myfs /hello.txt
 "Hello, World!"
 > FS.MKDIR myfs /docs/notes PARENTS
 OK
@@ -47,20 +49,20 @@ OK
 
 | Command | Description |
 |---------|-------------|
-| `FS.INIT key` | Initialize a filesystem |
+| `FS.MKFS key` | Initialize a filesystem |
 | `FS.INFO key` | Filesystem stats (file/dir/symlink counts, total bytes) |
-| `FS.WRITE key path content` | Write a file (auto-creates parents) |
-| `FS.READ key path` | Read file content (follows symlinks) |
+| `FS.ECHO key path content` | Write a file (auto-creates parents) |
+| `FS.CAT key path` | Read file content (follows symlinks) |
 | `FS.APPEND key path content` | Append to a file |
-| `FS.DEL key path [RECURSIVE]` | Delete file or directory |
+| `FS.RM key path [RECURSIVE]` | Delete file or directory |
 | `FS.TOUCH key path` | Create empty file or update timestamps |
 | `FS.MKDIR key path [PARENTS]` | Create directory |
 | `FS.LS key path [LONG]` | List directory contents |
 | `FS.STAT key path` | Get inode metadata |
-| `FS.EXISTS key path` | Check if path exists |
+| `FS.TEST key path` | Check if path exists |
 | `FS.CHMOD key path mode` | Change permission bits |
 | `FS.CHOWN key path uid [gid]` | Change ownership |
-| `FS.SYMLINK key target linkpath` | Create symbolic link |
+| `FS.LN key target linkpath` | Create symbolic link |
 | `FS.READLINK key path` | Read symlink target |
 | `FS.CP key src dst [RECURSIVE]` | Copy file or directory |
 | `FS.MV key src dst` | Move / rename |

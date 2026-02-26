@@ -564,13 +564,13 @@ void FSDigest(RedisModuleDigest *md, void *value) {
 }
 
 /* ===================================================================
- * FS.INIT key
+ * FS.MKFS key
  *
  * Initialize a new filesystem at the given key. Creates the root "/"
  * directory inode. If the key already exists and is an fstype, does
  * nothing (idempotent). Returns OK.
  * =================================================================== */
-int FSInit_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int FSMkfs_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModule_AutoMemory(ctx);
     if (argc != 2) return RedisModule_WrongArity(ctx);
 
@@ -625,18 +625,18 @@ int FSInfo_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
 }
 
 /* ===================================================================
- * FS.WRITE key path content
+ * FS.ECHO key path content
  *
  * Write (create or overwrite) a file. Creates parent dirs automatically.
  * =================================================================== */
-int FSWrite_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int FSEcho_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModule_AutoMemory(ctx);
     if (argc != 4) return RedisModule_WrongArity(ctx);
 
     RedisModuleKey *key;
     fsObject *fs = fsGetObject(ctx, argv[1], REDISMODULE_READ|REDISMODULE_WRITE, &key);
     if (!key) return REDISMODULE_OK;
-    if (!fs) return RedisModule_ReplyWithError(ctx, "ERR no such filesystem key — run FS.INIT first");
+    if (!fs) return RedisModule_ReplyWithError(ctx, "ERR no such filesystem key — run FS.MKFS first");
 
     size_t pathlen;
     const char *rawpath = RedisModule_StringPtrLen(argv[2], &pathlen);
@@ -692,11 +692,11 @@ int FSWrite_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc
 }
 
 /* ===================================================================
- * FS.READ key path
+ * FS.CAT key path
  *
  * Read file content. Follows symlinks.
  * =================================================================== */
-int FSRead_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int FSCat_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModule_AutoMemory(ctx);
     if (argc != 3) return RedisModule_WrongArity(ctx);
 
@@ -745,7 +745,7 @@ int FSAppend_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int arg
     RedisModuleKey *key;
     fsObject *fs = fsGetObject(ctx, argv[1], REDISMODULE_READ|REDISMODULE_WRITE, &key);
     if (!key) return REDISMODULE_OK;
-    if (!fs) return RedisModule_ReplyWithError(ctx, "ERR no such filesystem key — run FS.INIT first");
+    if (!fs) return RedisModule_ReplyWithError(ctx, "ERR no such filesystem key — run FS.MKFS first");
 
     size_t pathlen;
     const char *rawpath = RedisModule_StringPtrLen(argv[2], &pathlen);
@@ -800,7 +800,7 @@ int FSAppend_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int arg
 }
 
 /* ===================================================================
- * FS.DEL key path [RECURSIVE]
+ * FS.RM key path [RECURSIVE]
  *
  * Delete a file, directory, or symlink. Directories must be empty
  * unless RECURSIVE is specified.
@@ -853,7 +853,7 @@ static int fsDeleteRecursive(fsObject *fs, const char *path, size_t pathlen) {
     return 0;
 }
 
-int FSDel_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int FSRm_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModule_AutoMemory(ctx);
     if (argc < 3 || argc > 4) return RedisModule_WrongArity(ctx);
 
@@ -930,7 +930,7 @@ int FSTouch_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc
     RedisModuleKey *key;
     fsObject *fs = fsGetObject(ctx, argv[1], REDISMODULE_READ|REDISMODULE_WRITE, &key);
     if (!key) return REDISMODULE_OK;
-    if (!fs) return RedisModule_ReplyWithError(ctx, "ERR no such filesystem key — run FS.INIT first");
+    if (!fs) return RedisModule_ReplyWithError(ctx, "ERR no such filesystem key — run FS.MKFS first");
 
     size_t pathlen;
     const char *rawpath = RedisModule_StringPtrLen(argv[2], &pathlen);
@@ -990,7 +990,7 @@ int FSMkdir_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc
     RedisModuleKey *key;
     fsObject *fs = fsGetObject(ctx, argv[1], REDISMODULE_READ|REDISMODULE_WRITE, &key);
     if (!key) return REDISMODULE_OK;
-    if (!fs) return RedisModule_ReplyWithError(ctx, "ERR no such filesystem key — run FS.INIT first");
+    if (!fs) return RedisModule_ReplyWithError(ctx, "ERR no such filesystem key — run FS.MKFS first");
 
     size_t pathlen;
     const char *rawpath = RedisModule_StringPtrLen(argv[2], &pathlen);
@@ -1206,11 +1206,11 @@ int FSStat_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
 }
 
 /* ===================================================================
- * FS.EXISTS key path
+ * FS.TEST key path
  *
  * Returns 1 if the path exists, 0 otherwise.
  * =================================================================== */
-int FSExists_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int FSTest_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModule_AutoMemory(ctx);
     if (argc != 3) return RedisModule_WrongArity(ctx);
 
@@ -1309,18 +1309,18 @@ int FSChown_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc
 }
 
 /* ===================================================================
- * FS.SYMLINK key target linkpath
+ * FS.LN key target linkpath
  *
  * Create a symbolic link at linkpath pointing to target.
  * =================================================================== */
-int FSSymlink_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+int FSLn_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
     RedisModule_AutoMemory(ctx);
     if (argc != 4) return RedisModule_WrongArity(ctx);
 
     RedisModuleKey *key;
     fsObject *fs = fsGetObject(ctx, argv[1], REDISMODULE_READ|REDISMODULE_WRITE, &key);
     if (!key) return REDISMODULE_OK;
-    if (!fs) return RedisModule_ReplyWithError(ctx, "ERR no such filesystem key — run FS.INIT first");
+    if (!fs) return RedisModule_ReplyWithError(ctx, "ERR no such filesystem key — run FS.MKFS first");
 
     size_t targetlen;
     const char *target = RedisModule_StringPtrLen(argv[2], &targetlen);
@@ -1959,30 +1959,30 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
     FSType = RedisModule_CreateDataType(ctx, "redis-fs0", 0, &tm);
     if (FSType == NULL) return REDISMODULE_ERR;
 
-    /* ---- Register commands ---- */
+    /* ---- Register commands (Unix names) ---- */
 
-    if (RedisModule_CreateCommand(ctx, "FS.INIT",
-        FSInit_RedisCommand, "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
+    if (RedisModule_CreateCommand(ctx, "FS.MKFS",
+        FSMkfs_RedisCommand, "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
     if (RedisModule_CreateCommand(ctx, "FS.INFO",
         FSInfo_RedisCommand, "readonly fast", 1, 1, 1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "FS.WRITE",
-        FSWrite_RedisCommand, "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
+    if (RedisModule_CreateCommand(ctx, "FS.ECHO",
+        FSEcho_RedisCommand, "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "FS.READ",
-        FSRead_RedisCommand, "readonly", 1, 1, 1) == REDISMODULE_ERR)
+    if (RedisModule_CreateCommand(ctx, "FS.CAT",
+        FSCat_RedisCommand, "readonly", 1, 1, 1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
     if (RedisModule_CreateCommand(ctx, "FS.APPEND",
         FSAppend_RedisCommand, "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "FS.DEL",
-        FSDel_RedisCommand, "write", 1, 1, 1) == REDISMODULE_ERR)
+    if (RedisModule_CreateCommand(ctx, "FS.RM",
+        FSRm_RedisCommand, "write", 1, 1, 1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
     if (RedisModule_CreateCommand(ctx, "FS.TOUCH",
@@ -2001,8 +2001,8 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
         FSStat_RedisCommand, "readonly fast", 1, 1, 1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "FS.EXISTS",
-        FSExists_RedisCommand, "readonly fast", 1, 1, 1) == REDISMODULE_ERR)
+    if (RedisModule_CreateCommand(ctx, "FS.TEST",
+        FSTest_RedisCommand, "readonly fast", 1, 1, 1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
     if (RedisModule_CreateCommand(ctx, "FS.CHMOD",
@@ -2013,8 +2013,8 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
         FSChown_RedisCommand, "write", 1, 1, 1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx, "FS.SYMLINK",
-        FSSymlink_RedisCommand, "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
+    if (RedisModule_CreateCommand(ctx, "FS.LN",
+        FSLn_RedisCommand, "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
     if (RedisModule_CreateCommand(ctx, "FS.READLINK",

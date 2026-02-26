@@ -9,6 +9,9 @@ Think of it as RedisJSON for filesystems. Where JSON.* gives you a
 document, FS.* gives you a directory tree with files, symlinks,
 permissions, and all the metadata you'd expect from a real filesystem.
 
+The commands are named after their Unix counterparts. If you know
+`cat`, `ls`, `mkdir`, `grep` — you already know this module.
+
 Each filesystem lives under one key. Multiple filesystems are just
 multiple keys. No key prefix schemes, no naming conventions, no
 cleanup scripts. `DEL myfs` and the whole filesystem is gone.
@@ -29,19 +32,19 @@ Or if you're already running Redis with module loading enabled:
 
 ## Quick start
 
-    > FS.INIT myfs
+    > FS.MKFS myfs
     OK
 
-    > FS.WRITE myfs /hello.txt "Hello, World!"
+    > FS.ECHO myfs /hello.txt "Hello, World!"
     OK
 
-    > FS.READ myfs /hello.txt
+    > FS.CAT myfs /hello.txt
     "Hello, World!"
 
     > FS.MKDIR myfs /etc/nginx PARENTS
     OK
 
-    > FS.WRITE myfs /etc/nginx/nginx.conf "worker_processes auto;"
+    > FS.ECHO myfs /etc/nginx/nginx.conf "worker_processes auto;"
     OK
 
     > FS.LS myfs /
@@ -78,29 +81,29 @@ Or if you're already running Redis with module loading enabled:
 ## Unix to Redis command mapping
 
 If you've used a terminal, you already know how to use this module.
-The mapping is direct — we just dropped the concepts that don't make
-sense server-side (like `cd` and `pwd`, which are stateful client
-concerns) and merged a few commands that were needlessly separate
-(like `rm` and `rmdir`).
+The commands are the same — just prefixed with `FS.` and taking a
+key as the first argument. We dropped concepts that don't make sense
+server-side (like `cd` and `pwd`, which are stateful client concerns)
+and merged `rm` and `rmdir` into one command.
 
 | Unix command | Redis command | Notes |
 |---|---|---|
-| `cat file` | `FS.READ key /file` | Follows symlinks |
-| `echo "text" > file` | `FS.WRITE key /file "text"` | Creates parents automatically |
+| `cat file` | `FS.CAT key /file` | Follows symlinks |
+| `echo "text" > file` | `FS.ECHO key /file "text"` | Creates parents automatically |
 | `echo "text" >> file` | `FS.APPEND key /file "text"` | Creates file if missing |
 | `touch file` | `FS.TOUCH key /file` | Creates or updates mtime |
-| `rm file` | `FS.DEL key /file` | Works on files, dirs, symlinks |
-| `rm -r dir` | `FS.DEL key /dir RECURSIVE` | Deletes entire subtree |
-| `rmdir dir` | `FS.DEL key /dir` | Fails if not empty (use RECURSIVE) |
+| `rm file` | `FS.RM key /file` | Works on files, dirs, symlinks |
+| `rm -r dir` | `FS.RM key /dir RECURSIVE` | Deletes entire subtree |
+| `rmdir dir` | `FS.RM key /dir` | Fails if not empty (use RECURSIVE) |
 | `mkdir dir` | `FS.MKDIR key /dir` | Parent must exist |
 | `mkdir -p a/b/c` | `FS.MKDIR key /a/b/c PARENTS` | Creates intermediates |
 | `ls dir` | `FS.LS key /dir` | Returns child names |
 | `ls -l dir` | `FS.LS key /dir LONG` | Includes type, mode, size, mtime |
 | `stat file` | `FS.STAT key /file` | Full metadata: type, mode, uid, gid, times |
-| `test -e file` | `FS.EXISTS key /file` | Returns 1 or 0 |
+| `test -e file` | `FS.TEST key /file` | Returns 1 or 0 |
 | `chmod 0755 file` | `FS.CHMOD key /file 0755` | Octal mode string |
 | `chown uid:gid file` | `FS.CHOWN key /file uid gid` | Separate uid and gid args |
-| `ln -s target link` | `FS.SYMLINK key /target /link` | Target can be relative or absolute |
+| `ln -s target link` | `FS.LN key /target /link` | Target can be relative or absolute |
 | `readlink link` | `FS.READLINK key /link` | Returns raw target string |
 | `cp src dst` | `FS.CP key /src /dst` | Files only without RECURSIVE |
 | `cp -r src dst` | `FS.CP key /src /dst RECURSIVE` | Deep copy with metadata |
@@ -112,7 +115,7 @@ concerns) and merged a few commands that were needlessly separate
 | `grep -r "pattern" dir` | `FS.GREP key /dir "*pattern*"` | Glob match on each line |
 | `grep -ri "pattern" dir` | `FS.GREP key /dir "*pattern*" NOCASE` | Case-insensitive |
 | `df` / `du` | `FS.INFO key` | File/dir/symlink counts + total bytes |
-| `mkfs` | `FS.INIT key` | Creates root directory, idempotent |
+| `mkfs` | `FS.MKFS key` | Creates root directory, idempotent |
 | `cd`, `pwd` | *(not applicable)* | Client-side state, not server commands |
 | `vol list`, `vol switch` | *(not applicable)* | Volumes are just keys: use `KEYS`, `SCAN` |
 
@@ -131,7 +134,7 @@ inodes. Each inode stores:
 File content is stored inline in the inode. There's no chunking and no
 separate data key — Redis handles large allocations just fine. A 10 MB
 file is a 10 MB allocation inside the inode. This keeps the
-implementation simple and atomic: a `FS.WRITE` is a single dict
+implementation simple and atomic: an `FS.ECHO` is a single dict
 lookup and a memory copy, not a multi-key transaction.
 
 Directories store an array of child *names* (not full paths). When you
@@ -141,21 +144,21 @@ them up in the dict.
 
 Paths are always normalized to absolute form. Leading `./` and `../`
 components are resolved. Multiple slashes collapse. Trailing slashes
-are stripped. The root `/` always exists after `FS.INIT`.
+are stripped. The root `/` always exists after `FS.MKFS`.
 
 ## Reference of available commands
 
-**FS.INIT: initialize a filesystem**
+**FS.MKFS: initialize a filesystem**
 
-    FS.INIT key
+    FS.MKFS key
 
 Creates a new filesystem at the given key with an empty root directory.
 If the key already exists and is an FS type, this is a no-op. Idempotent.
 Call this before any other FS command on a key.
 
-    > FS.INIT myfs
+    > FS.MKFS myfs
     OK
-    > FS.INIT myfs
+    > FS.MKFS myfs
     OK
 
 Time complexity: O(1).
@@ -181,9 +184,9 @@ field-value pairs.
 
 Time complexity: O(1) — all counters are maintained incrementally.
 
-**FS.WRITE: write a file**
+**FS.ECHO: write a file**
 
-    FS.WRITE key path content
+    FS.ECHO key path content
 
 Creates or overwrites a file at the given path. The content is stored
 as a binary-safe string — you can write text, JSON, binary blobs,
@@ -194,10 +197,10 @@ If parent directories don't exist, they're created automatically
 is a file, its content is replaced. If it exists but is a directory
 or symlink, an error is returned.
 
-    > FS.WRITE myfs /config.json '{"port": 8080}'
+    > FS.ECHO myfs /config.json '{"port": 8080}'
     OK
 
-    > FS.WRITE myfs /deep/nested/path/file.txt "auto-created parents"
+    > FS.ECHO myfs /deep/nested/path/file.txt "auto-created parents"
     OK
 
     > FS.LS myfs /deep/nested/path
@@ -205,9 +208,9 @@ or symlink, an error is returned.
 
 Time complexity: O(d) where d is the path depth (for parent creation).
 
-**FS.READ: read a file**
+**FS.CAT: read a file**
 
-    FS.READ key path
+    FS.CAT key path
 
 Returns the content of a file. Follows symbolic links automatically
 (up to 40 levels deep). Updates the file's access time.
@@ -215,13 +218,13 @@ Returns the content of a file. Follows symbolic links automatically
 Returns null if the path doesn't exist. Returns an error if the path
 is a directory.
 
-    > FS.READ myfs /config.json
+    > FS.CAT myfs /config.json
     "{\"port\": 8080}"
 
-    > FS.READ myfs /nonexistent
+    > FS.CAT myfs /nonexistent
     (nil)
 
-    > FS.READ myfs /somedir
+    > FS.CAT myfs /somedir
     (error) ERR not a file
 
 Time complexity: O(1) for regular files, O(s) for symlinks where s is the chain length.
@@ -233,20 +236,20 @@ Time complexity: O(1) for regular files, O(s) for symlinks where s is the chain 
 Appends content to an existing file, or creates a new file if the
 path doesn't exist. Returns the new total size in bytes.
 
-Parent directories are created automatically, same as `FS.WRITE`.
+Parent directories are created automatically, same as `FS.ECHO`.
 
-    > FS.WRITE myfs /log.txt "line 1\n"
+    > FS.ECHO myfs /log.txt "line 1\n"
     OK
     > FS.APPEND myfs /log.txt "line 2\n"
     (integer) 14
-    > FS.READ myfs /log.txt
+    > FS.CAT myfs /log.txt
     "line 1\nline 2\n"
 
 Time complexity: O(1) amortized for the append, O(d) if parents need creation.
 
-**FS.DEL: delete a file or directory**
+**FS.RM: delete a file or directory**
 
-    FS.DEL key path [RECURSIVE]
+    FS.RM key path [RECURSIVE]
 
 Deletes the inode at the given path. For files and symlinks, this is
 straightforward. For directories, the directory must be empty unless
@@ -256,19 +259,19 @@ depth-first.
 Returns 1 if something was deleted, 0 if the path didn't exist.
 You cannot delete the root directory.
 
-    > FS.DEL myfs /old-file.txt
+    > FS.RM myfs /old-file.txt
     (integer) 1
 
-    > FS.DEL myfs /nonempty-dir
+    > FS.RM myfs /nonempty-dir
     (error) ERR directory not empty — use RECURSIVE
 
-    > FS.DEL myfs /nonempty-dir RECURSIVE
+    > FS.RM myfs /nonempty-dir RECURSIVE
     (integer) 1
 
-    > FS.DEL myfs /already-gone
+    > FS.RM myfs /already-gone
     (integer) 0
 
-    > FS.DEL myfs /
+    > FS.RM myfs /
     (error) ERR cannot delete root directory
 
 Time complexity: O(1) for files, O(n) with RECURSIVE where n is the subtree size.
@@ -285,7 +288,7 @@ Parent directories are created automatically.
 
     > FS.TOUCH myfs /marker.txt
     OK
-    > FS.READ myfs /marker.txt
+    > FS.CAT myfs /marker.txt
     ""
 
 Time complexity: O(d) where d is the path depth.
@@ -379,15 +382,16 @@ For files, `size` is the content length in bytes. For directories,
 
 Time complexity: O(1).
 
-**FS.EXISTS: check if a path exists**
+**FS.TEST: check if a path exists**
 
-    FS.EXISTS key path
+    FS.TEST key path
 
 Returns 1 if the path exists, 0 otherwise. Does not follow symlinks.
+Named after `test -e` in shell.
 
-    > FS.EXISTS myfs /config.json
+    > FS.TEST myfs /config.json
     (integer) 1
-    > FS.EXISTS myfs /nope
+    > FS.TEST myfs /nope
     (integer) 0
 
 Time complexity: O(1).
@@ -424,9 +428,9 @@ unsigned 32-bit integers.
 
 Time complexity: O(1).
 
-**FS.SYMLINK: create a symbolic link**
+**FS.LN: create a symbolic link**
 
-    FS.SYMLINK key target linkpath
+    FS.LN key target linkpath
 
 Creates a symbolic link at `linkpath` pointing to `target`. The target
 is stored as-is — it can be an absolute path (`/etc/config`) or a
@@ -435,9 +439,9 @@ when another command follows the link.
 
 Parent directories for `linkpath` are created automatically.
 
-    > FS.SYMLINK myfs /config.json /shortcut
+    > FS.LN myfs /config.json /shortcut
     OK
-    > FS.READ myfs /shortcut
+    > FS.CAT myfs /shortcut
     "{\"port\": 8080}"
     > FS.READLINK myfs /shortcut
     "/config.json"
@@ -446,11 +450,11 @@ Symlink chains are followed up to 40 levels deep. If you create a
 cycle, commands that follow symlinks will return an error rather than
 hang:
 
-    > FS.SYMLINK myfs /b /a
+    > FS.LN myfs /b /a
     OK
-    > FS.SYMLINK myfs /a /b
+    > FS.LN myfs /a /b
     OK
-    > FS.READ myfs /a
+    > FS.CAT myfs /a
     (error) ERR too many levels of symbolic links
 
 Time complexity: O(d) where d is the path depth.
@@ -460,8 +464,7 @@ Time complexity: O(d) where d is the path depth.
     FS.READLINK key path
 
 Returns the raw target string of a symbolic link. Does not follow
-the link — returns what was passed as the target argument to
-`FS.SYMLINK`.
+the link — returns what was passed as the target argument to `FS.LN`.
 
 Returns null if the path doesn't exist. Returns an error if the
 path is not a symlink.
@@ -577,7 +580,7 @@ any sequence: `*error*` matches any line containing "error".
 
 Use `NOCASE` for case-insensitive matching.
 
-    > FS.WRITE myfs /app.log "INFO: started\nERROR: disk full\nINFO: retrying"
+    > FS.ECHO myfs /app.log "INFO: started\nERROR: disk full\nINFO: retrying"
     OK
     > FS.GREP myfs / "*ERROR*"
     1) 1) "/app.log"
@@ -631,9 +634,9 @@ partial state visible to other clients.
 
 This means:
 
-- `FS.WRITE` either fully replaces the file or doesn't
+- `FS.ECHO` either fully replaces the file or doesn't
 - `FS.MV` relocates an entire subtree atomically
-- `FS.DEL ... RECURSIVE` removes everything or nothing
+- `FS.RM ... RECURSIVE` removes everything or nothing
 - `FS.CP ... RECURSIVE` creates a complete copy in one shot
 
 The tradeoff is that large operations block. A recursive delete of a
@@ -648,9 +651,9 @@ The old redis-fs-cli used a key naming convention (`fs:{volume}:meta:`,
 `fs:{volume}:data:`, etc.) to implement volumes. The module approach
 is simpler: **a volume is just a key**.
 
-    > FS.INIT project-alpha
-    > FS.INIT project-beta
-    > FS.INIT staging
+    > FS.MKFS project-alpha
+    > FS.MKFS project-beta
+    > FS.MKFS staging
 
 To list all filesystems:
 
@@ -687,15 +690,15 @@ does what you'd expect.
 
 Most operations are dict lookups — O(1) in the average case.
 Directory listings are O(n) in the child count. Recursive operations
-(TREE, FIND, GREP, recursive CP/DEL) are O(n) in the subtree size.
+(TREE, FIND, GREP, recursive CP/RM) are O(n) in the subtree size.
 
 The critical insight is that path lookup is a hash table lookup, not
-a directory-by-directory traversal. `FS.READ myfs /a/b/c/d/e/f.txt`
+a directory-by-directory traversal. `FS.CAT myfs /a/b/c/d/e/f.txt`
 doesn't walk six directories — it normalizes the path and does a
 single dict lookup. This makes deep hierarchies essentially free
 for point queries.
 
-Write operations (WRITE, MKDIR, etc.) do update parent directories
+Write operations (ECHO, MKDIR, etc.) do update parent directories
 to maintain the children array, which adds O(d) work where d is the
 depth. But for a typical depth of 3-5, this is negligible.
 
@@ -707,4 +710,4 @@ depth. But for a typical depth of 3-5, this is negligible.
 - **Extended attributes**: Phase 2. Coming as `FS.XATTR.SET/GET/DEL/LIST`.
 - **Full-text search**: Use RediSearch with a custom indexer. The module stores the data, but doesn't maintain search indexes.
 - **Vector embeddings**: Same — use Vector Sets alongside this module if you need semantic search over file contents.
-- **Streaming / range reads**: `FS.READ` returns the whole file. There's no `FS.READ key /file OFFSET 1024 COUNT 4096` yet. If you need that, it's a reasonable Phase 2 addition.
+- **Streaming / range reads**: `FS.CAT` returns the whole file. There's no `FS.CAT key /file OFFSET 1024 COUNT 4096` yet. If you need that, it's a reasonable Phase 2 addition.
