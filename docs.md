@@ -32,9 +32,6 @@ Or if you're already running Redis with module loading enabled:
 
 ## Quick start
 
-    > FS.MKFS myfs
-    OK
-
     > FS.ECHO myfs /hello.txt "Hello, World!"
     OK
 
@@ -115,7 +112,6 @@ and merged `rm` and `rmdir` into one command.
 | `grep -r "pattern" dir` | `FS.GREP key /dir "*pattern*"` | Glob match on each line |
 | `grep -ri "pattern" dir` | `FS.GREP key /dir "*pattern*" NOCASE` | Case-insensitive |
 | `df` / `du` | `FS.INFO key` | File/dir/symlink counts + total bytes |
-| `mkfs` | `FS.MKFS key` | Creates root directory, idempotent |
 | `cd`, `pwd` | *(not applicable)* | Client-side state, not server commands |
 | `vol list`, `vol switch` | *(not applicable)* | Volumes are just keys: use `KEYS`, `SCAN` |
 
@@ -144,24 +140,39 @@ them up in the dict.
 
 Paths are always normalized to absolute form. Leading `./` and `../`
 components are resolved. Multiple slashes collapse. Trailing slashes
-are stripped. The root `/` always exists after `FS.MKFS`.
+are stripped. The root `/` is created automatically when the first
+write operation touches a key.
+
+## Key lifecycle
+
+Filesystem keys follow the standard Redis convention: **the first write
+creates the key, and deleting the last entry removes it**.
+
+There is no `MKFS` or `INIT` command. When you run `FS.ECHO`, `FS.MKDIR`,
+`FS.TOUCH`, or any other write command against a key that doesn't exist,
+the module creates the key with an empty root directory, then performs
+the operation. This is identical to how `SADD` creates a set on first
+add, or `HSET` creates a hash on first field.
+
+    > EXISTS myfs
+    (integer) 0
+    > FS.ECHO myfs /hello.txt "world"
+    OK
+    > EXISTS myfs
+    (integer) 1
+
+When the last file or directory is removed (leaving only the root),
+the key is automatically deleted:
+
+    > FS.RM myfs /hello.txt
+    (integer) 1
+    > EXISTS myfs
+    (integer) 0
+
+Read-only commands (`FS.CAT`, `FS.LS`, `FS.INFO`, etc.) against a
+nonexistent key return an error rather than creating an empty filesystem.
 
 ## Reference of available commands
-
-**FS.MKFS: initialize a filesystem**
-
-    FS.MKFS key
-
-Creates a new filesystem at the given key with an empty root directory.
-If the key already exists and is an FS type, this is a no-op. Idempotent.
-Call this before any other FS command on a key.
-
-    > FS.MKFS myfs
-    OK
-    > FS.MKFS myfs
-    OK
-
-Time complexity: O(1).
 
 **FS.INFO: get filesystem statistics**
 
@@ -649,11 +660,15 @@ multiple keys.
 
 The old redis-fs-cli used a key naming convention (`fs:{volume}:meta:`,
 `fs:{volume}:data:`, etc.) to implement volumes. The module approach
-is simpler: **a volume is just a key**.
+is simpler: **a volume is just a key**. The first write to a key
+creates the filesystem automatically.
 
-    > FS.MKFS project-alpha
-    > FS.MKFS project-beta
-    > FS.MKFS staging
+    > FS.ECHO project-alpha /README.md "Alpha project"
+    OK
+    > FS.ECHO project-beta /README.md "Beta project"
+    OK
+    > FS.ECHO staging /app.conf "port=8080"
+    OK
 
 To list all filesystems:
 

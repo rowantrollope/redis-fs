@@ -21,8 +21,6 @@ redis-server --loadmodule ./fs.so
 ## Quick Start
 
 ```
-> FS.MKFS myfs
-OK
 > FS.ECHO myfs /hello.txt "Hello, World!"
 OK
 > FS.CAT myfs /hello.txt
@@ -49,7 +47,6 @@ OK
 
 | Command | Description |
 |---------|-------------|
-| `FS.MKFS key` | Initialize a filesystem |
 | `FS.INFO key` | Filesystem stats (file/dir/symlink counts, total bytes) |
 | `FS.ECHO key path content` | Write a file (auto-creates parents) |
 | `FS.CAT key path` | Read file content (follows symlinks) |
