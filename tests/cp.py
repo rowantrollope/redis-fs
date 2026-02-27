@@ -1,4 +1,5 @@
 from test import TestCase
+from tests.invariants import assert_tree_consistent
 
 
 class Cp(TestCase):
@@ -37,6 +38,7 @@ class Cp(TestCase):
         assert r.execute_command("FS.CP", k, "/srcdir", "/dstdir", "RECURSIVE") == b"OK"
         assert r.execute_command("FS.CAT", k, "/dstdir/a.txt") == b"a"
         assert r.execute_command("FS.CAT", k, "/dstdir/sub/b.txt") == b"b"
+        assert_tree_consistent(r, k)
 
         # Error if dst already exists.
         try:

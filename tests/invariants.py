@@ -1,4 +1,7 @@
 def assert_tree_consistent(r, key):
+    if r.exists(key) == 0:
+        return
+
     # Verify each listed child exists and each node is referenced by its parent.
     dirs = r.execute_command("FS.FIND", key, "/", "*", "TYPE", "dir") or []
     all_paths = r.execute_command("FS.FIND", key, "/", "*") or []
