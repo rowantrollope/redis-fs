@@ -10,31 +10,31 @@
 /* Normalize a path to absolute form. Resolves ".", "..", multiple slashes.
  * Always returns a path starting with '/'. */
 char *fsNormalizePath(const char *path, size_t len) {
-    /* Stack of component start positions and lengths. */
+    // Stack of component start positions and lengths.
     struct { size_t start; size_t len; } parts[256];
     int depth = 0;
 
     if (len == 0 || path[0] != '/') {
-        /* Treat relative path as absolute from root. */
-        /* We'll prepend '/' conceptually. */
+        // Treat relative path as absolute from root.
+        // We'll prepend '/' conceptually.
     }
 
     size_t i = 0;
     while (i < len) {
-        /* Skip slashes. */
+        // Skip slashes.
         while (i < len && path[i] == '/') i++;
         if (i >= len) break;
 
-        /* Find component end. */
+        // Find component end.
         size_t start = i;
         while (i < len && path[i] != '/') i++;
         size_t clen = i - start;
 
         if (clen == 1 && path[start] == '.') {
-            /* Current dir - skip. */
+            // Current dir - skip.
             continue;
         } else if (clen == 2 && path[start] == '.' && path[start+1] == '.') {
-            /* Parent dir. */
+            // Parent dir.
             if (depth > 0) depth--;
         } else {
             if (depth < 256) {
@@ -52,10 +52,10 @@ char *fsNormalizePath(const char *path, size_t len) {
         return root;
     }
 
-    /* Calculate total length. */
+    // Calculate total length.
     size_t total = 0;
     for (int j = 0; j < depth; j++) {
-        total += 1 + parts[j].len; /* '/' + component */
+        total += 1 + parts[j].len; // '/' + component
     }
 
     char *result = RedisModule_Alloc(total + 1);
@@ -72,16 +72,16 @@ char *fsNormalizePath(const char *path, size_t len) {
 /* Return the parent directory. */
 char *fsParentPath(const char *path, size_t len) {
     if (len <= 1) {
-        /* Root or empty → root. */
+        // Root or empty → root.
         char *root = RedisModule_Alloc(2);
         root[0] = '/';
         root[1] = '\0';
         return root;
     }
 
-    /* Find the last '/'. */
+    // Find the last '/'.
     size_t last = len - 1;
-    /* Skip trailing slash if any (shouldn't happen with normalized paths). */
+    // Skip trailing slash if any (shouldn't happen with normalized paths).
     if (path[last] == '/' && last > 0) last--;
     while (last > 0 && path[last] != '/') last--;
 
@@ -108,7 +108,7 @@ char *fsBaseName(const char *path, size_t len) {
     }
 
     size_t end = len;
-    /* Skip trailing slash. */
+    // Skip trailing slash.
     if (path[end-1] == '/' && end > 1) end--;
 
     size_t start = end;
@@ -123,12 +123,12 @@ char *fsBaseName(const char *path, size_t len) {
 
 /* Join two path components. */
 char *fsJoinPath(const char *a, size_t alen, const char *b, size_t blen) {
-    /* If b is absolute, just normalize b. */
+    // If b is absolute, just normalize b.
     if (blen > 0 && b[0] == '/') {
         return fsNormalizePath(b, blen);
     }
 
-    /* Concatenate a + "/" + b, then normalize. */
+    // Concatenate a + "/" + b, then normalize.
     size_t total = alen + 1 + blen;
     char *tmp = RedisModule_Alloc(total + 1);
     memcpy(tmp, a, alen);
@@ -163,10 +163,10 @@ static int fsGlobMatchInternal(const char *pattern, const char *string, int noca
     while (*pattern && *string) {
         switch (*pattern) {
         case '*':
-            /* Collapse consecutive stars. */
+            // Collapse consecutive stars.
             while (*pattern == '*') pattern++;
             if (*pattern == '\0') return 1;
-            /* Try matching the rest of the pattern at each position. */
+            // Try matching the rest of the pattern at each position.
             while (*string) {
                 if (fsGlobMatchInternal(pattern, string, nocase)) return 1;
                 string++;
@@ -174,13 +174,13 @@ static int fsGlobMatchInternal(const char *pattern, const char *string, int noca
             return fsGlobMatchInternal(pattern, string, nocase);
 
         case '?':
-            /* Match any single character. */
+            // Match any single character.
             pattern++;
             string++;
             break;
 
         case '[': {
-            /* Character class. */
+            // Character class.
             pattern++;
             int negate = 0;
             if (*pattern == '!' || *pattern == '^') {
@@ -205,9 +205,9 @@ static int fsGlobMatchInternal(const char *pattern, const char *string, int noca
                 }
                 if (nocase) lo = (unsigned char)tolower(lo);
 
-                /* Check for range: a-z */
+                // Check for range: a-z
                 if (*(pattern+1) == '-' && *(pattern+2) && *(pattern+2) != ']') {
-                    pattern += 2; /* skip past '-' */
+                    pattern += 2; // skip past '-'
                     if (*pattern == '\\' && *(pattern+1)) {
                         pattern++;
                         hi = (unsigned char)*pattern;
@@ -219,17 +219,17 @@ static int fsGlobMatchInternal(const char *pattern, const char *string, int noca
                     if (lo <= hi) {
                         if (sc >= lo && sc <= hi) matched = 1;
                     } else {
-                        /* Reversed range, e.g., [z-a] — match if in either direction. */
+                        // Reversed range, e.g., [z-a] — match if in either direction.
                         if (sc >= hi && sc <= lo) matched = 1;
                     }
                 } else {
-                    /* Single character match. */
+                    // Single character match.
                     if (sc == lo) matched = 1;
                 }
                 pattern++;
             }
 
-            if (*pattern == ']') pattern++; /* Skip closing bracket. */
+            if (*pattern == ']') pattern++; // Skip closing bracket.
 
             if (negate) matched = !matched;
             if (!matched) return 0;
@@ -238,14 +238,14 @@ static int fsGlobMatchInternal(const char *pattern, const char *string, int noca
         }
 
         case '\\':
-            /* Escape: next character is literal. */
+            // Escape: next character is literal.
             pattern++;
             if (*pattern == '\0') return 0;
-            /* Fall through to literal comparison. */
-            /* fallthrough */
+            // Fall through to literal comparison.
+            // fallthrough
 
         default: {
-            /* Literal character comparison. */
+            // Literal character comparison.
             unsigned char pc = (unsigned char)*pattern;
             unsigned char sc = (unsigned char)*string;
             if (nocase) {
@@ -260,7 +260,7 @@ static int fsGlobMatchInternal(const char *pattern, const char *string, int noca
         }
     }
 
-    /* Skip trailing stars. */
+    // Skip trailing stars.
     while (*pattern == '*') pattern++;
     return (*pattern == '\0' && *string == '\0');
 }
