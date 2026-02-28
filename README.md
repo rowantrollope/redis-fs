@@ -9,7 +9,7 @@ This repository has three parts:
   filesystem storage in one key.
 - `mount/redis-fs-mount`: FUSE daemon that translates Linux file ops to
   `FS.*` commands.
-- `mount/rfs`: CLI orchestrator (recommended entrypoint) for bringing
+- `rfs`: CLI orchestrator (recommended entrypoint) for bringing
   up Redis + mount daemons, status, teardown, and in-place migration.
 
 ## Recommended Workflow (CLI-first)
@@ -18,21 +18,25 @@ This repository has three parts:
 
        make
 
-2. Run the interactive setup:
+2. Run the interactive setup
 
-       ./mount/rfs up
+        ./rfs setup
+
+3. Start managed services: 
+
+        ./rfs up
 
 3. Check status:
 
-       ./mount/rfs status
+        ./rfs status
 
 4. Stop managed services:
 
-       ./mount/rfs down
+       ./rfs down
 
 For migrating an existing local directory in place:
 
-    ./mount/rfs migrate
+        ./rfs migrate <directory>
 
 `migrate` imports files into Redis, renames the original directory to
 `<dir>.archive`, and mounts Redis back at the original path.
@@ -40,8 +44,9 @@ For migrating an existing local directory in place:
 ## Project Layout
 
 - `module/Makefile`: builds `module/fs.so`.
-- `mount/Makefile`: builds `mount/redis-fs-mount` and `mount/rfs`.
-- root `Makefile`: orchestrator for `module` + `mount`.
+- `mount/Makefile`: builds `mount/redis-fs-mount`.
+- `cli/Makefile`: builds `rfs` (output to repo root).
+- root `Makefile`: orchestrator for all three.
 
 Useful root targets:
 

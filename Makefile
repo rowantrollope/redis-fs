@@ -1,6 +1,6 @@
-.PHONY: all module mount clean test
+.PHONY: all module mount cli clean test
 
-all: module mount
+all: module mount cli
 
 module:
 	$(MAKE) -C module
@@ -8,9 +8,13 @@ module:
 mount:
 	$(MAKE) -C mount
 
+cli:
+	$(MAKE) -C cli
+
 clean:
 	$(MAKE) -C module clean
 	$(MAKE) -C mount clean
+	$(MAKE) -C cli clean
 	$(RM) fs.so fs.xo path.xo
 
 test: module

@@ -5,16 +5,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Test
 
 ```bash
-make                # build module/fs.so + mount/redis-fs-mount
+make                # build module/fs.so + mount/redis-fs-mount + rfs
 make module         # build module/fs.so only
-make mount          # build mount/redis-fs-mount + mount/rfs
-make clean          # remove compiled artifacts in module/ and mount/
+make mount          # build mount/redis-fs-mount only
+make cli            # build rfs only
+make clean          # remove compiled artifacts
 
-# Interactive lifecycle/migration helper:
-./mount/rfs up
-./mount/rfs migrate
-./mount/rfs status
-./mount/rfs down
+# CLI lifecycle helper:
+./rfs setup
+./rfs up
+./rfs down
+./rfs status
+./rfs migrate <directory>
 ```
 
 Load into Redis for manual testing:
