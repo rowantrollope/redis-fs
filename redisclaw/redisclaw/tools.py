@@ -12,8 +12,7 @@ Like Pi agent, we use a minimal set of powerful tools:
 """
 
 from typing import Any
-import fnmatch
-import re
+
 import httpx
 import redis
 

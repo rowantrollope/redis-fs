@@ -18,15 +18,15 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Generator
 
-
-def utc_now_iso() -> str:
-    """Get current UTC time as ISO format string."""
-    return datetime.now(timezone.utc).isoformat()
-
 import anthropic
 import redis
 
 from .tools import TOOLS, ToolExecutor
+
+
+def utc_now_iso() -> str:
+    """Get current UTC time as ISO format string."""
+    return datetime.now(timezone.utc).isoformat()
 
 
 # Minimal system prompt like Pi agent

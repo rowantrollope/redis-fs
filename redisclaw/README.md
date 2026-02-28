@@ -1,13 +1,14 @@
 # RedisClaw 🦀
 
-A coding agent with Redis-FS backed sandbox, inspired by OpenClaw/Pi.
+An OpenClaw-style task-solving coding agent with Redis-FS backed persistent sandbox.
 
 ## Features
 
-- **Agent Loop**: Full tool-use agent loop with Claude
+- **Task-Solving Agent Loop**: Iterates until the task is complete (like OpenClaw/Pi)
+- **Minimal Tool Set**: Bash, Read, Write, Edit, Glob, Grep, TodoWrite
+- **Session Management**: Persist and resume conversations
 - **Redis-FS Storage**: Persistent filesystem backed by Redis
 - **Sandboxed Execution**: Code runs in isolated Docker container
-- **Interactive CLI**: Chat with the agent or use direct commands
 
 ## Quick Start
 
@@ -18,55 +19,101 @@ cd ../sandbox && docker-compose up -d
 # Install RedisClaw
 pip install -e .
 
-# Run interactive mode (requires ANTHROPIC_API_KEY)
+# Run a task (requires ANTHROPIC_API_KEY)
 export ANTHROPIC_API_KEY=your_key
+redisclaw --task "Write a Python script that prints hello world and run it"
+
+# Interactive mode
 redisclaw
 
-# Or use direct commands (no API key needed)
-redisclaw --ls /
-redisclaw --run "echo hello"
+# Direct commands (no API key needed)
+redisclaw --bash "python3 --version"
 redisclaw --read /some/file.txt
+redisclaw --ls /workspace
 ```
 
 ## Architecture
 
 ```
-┌─────────────────┐     ┌─────────────────┐
-│   RedisClaw     │     │   Redis + FS    │
-│   Agent Loop    │────▶│   Module        │
-└────────┬────────┘     └────────┬────────┘
-         │                       │
-         │ REST API              │ FUSE Mount
-         ▼                       ▼
-┌─────────────────────────────────────────┐
-│              Sandbox Container          │
-│  /workspace ◀── FUSE ──▶ Redis FS Key   │
-│  Python, Node.js, Git, etc.             │
-└─────────────────────────────────────────┘
+┌────────────────────────────────────────────┐
+│              RedisClaw CLI                  │
+│  /task, /bash, /session, /new, /resume     │
+└─────────────────────┬──────────────────────┘
+                      │
+┌─────────────────────┴──────────────────────┐
+│            Agent Loop                       │
+│  1. Receive task                           │
+│  2. Call Claude with tools                 │
+│  3. Execute tool calls                     │
+│  4. Loop until complete                    │
+│  5. Save session                           │
+└─────────────────────┬──────────────────────┘
+                      │
+        ┌─────────────┴─────────────┐
+        │                           │
+        ▼                           ▼
+┌───────────────┐          ┌───────────────┐
+│    Sandbox    │          │   Redis-FS    │
+│  (Docker)     │          │  (Storage)    │
+│               │◄────────►│               │
+│ /workspace    │   FUSE   │ Key: sandbox  │
+│ python, node  │  mount   │               │
+└───────────────┘          └───────────────┘
 ```
 
 ## CLI Commands
 
-In interactive mode:
+**Interactive mode commands:**
 
-- `/run <cmd>` - Run a shell command in sandbox
-- `/read <path>` - Read a file
-- `/ls [path]` - List files
-- `/write <path>` - Write a file (prompts for content)
-- `/clear` - Clear conversation history
-- `/exit` - Exit
+| Command | Description |
+|---------|-------------|
+| `/task <desc>` | Give the agent a task to solve |
+| `/bash <cmd>` | Run a shell command directly |
+| `/read <path>` | Read a file |
+| `/write <path>` | Write a file (stdin) |
+| `/ls [path]` | List files |
+| `/glob <pattern>` | Find files by pattern |
+| `/grep <pattern> [path]` | Search file contents |
+| `/session` | Show current session info |
+| `/sessions` | List all sessions |
+| `/new` | Start a new session |
+| `/resume <id>` | Resume a session |
+| `/clear` | Clear current session |
+| `/help` | Show help |
+| `/exit` | Exit |
 
-Or just type naturally to chat with the agent.
+Or just type a task directly to start the agent loop.
 
 ## Tools
 
-The agent has access to:
+The agent uses a minimal, powerful tool set (like Pi agent):
 
-- `run_command` - Execute shell commands in sandbox
-- `read_file` - Read files from workspace
-- `write_file` - Write files to workspace
-- `list_files` - List directory contents
-- `delete_file` - Delete files/directories
+| Tool | Description |
+|------|-------------|
+| `Bash` | Run shell commands in the sandbox |
+| `Read` | Read file contents |
+| `Write` | Write/create files |
+| `Edit` | Make targeted search/replace edits |
+| `Glob` | Find files by pattern |
+| `Grep` | Search file contents |
+| `TodoWrite` | Track multi-step task progress |
+
+## Session Management
+
+Sessions persist to Redis with a 7-day TTL:
+
+```bash
+# Start a new session
+redisclaw
+
+# Resume a specific session
+redisclaw --session <session_id>
+
+# Or in interactive mode
+/sessions        # List all sessions
+/resume abc123   # Resume by ID prefix
+/new             # Start fresh
+```
 
 ## Testing
 
@@ -86,4 +133,7 @@ pytest tests/test_e2e.py -v
 | `--redis` | `redis://localhost:6380` | Redis URL |
 | `--key` | `sandbox` | Redis FS key |
 | `--model` | `claude-sonnet-4-20250514` | Claude model |
+| `--session` | (none) | Resume a session by ID |
+| `--task` | (none) | Run a task and exit |
+| `--bash` | (none) | Run a command and exit |
 
