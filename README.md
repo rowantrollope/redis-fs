@@ -1,92 +1,78 @@
-This module implements a virtual filesystem for Redis, a new data type
-offering a POSIX-like directory tree
-inside a single Redis key. The fundamental goal is to provide filesystem
-operations — create files, read them, organize them into directories,
-search their contents — all as atomic Redis commands, without the
-overhead of managing dozens of scattered keys per volume.
+# Redis-FS
 
-Agents are finding many uses for storing data in .MD files in a standard 
-filesystem, and using standard linux commands like LS, ECHO, CAT, GREP and etc.
+Redis-FS is a Redis module + FUSE mount stack that lets you use a Redis
+key as a real filesystem.
 
-Most often these agents are storing these files on the local filesystem,
-but this is limiting in many ways. The alternative is often to replace the use of the 
-local filesystem with a database, which is considerable change to serialize
-the data into a new format, etc. By offering a lightweight filesystem
-as a native datatype in redis, the Agent can be told to move the local 
-file storage to Redis using the same commands its already using.
+This repository has three parts:
 
-Think of it as RedisJSON for filesystems. Where `JSON.*` gives you a
-document, `FS.*` gives you a directory tree with files, symlinks,
-permissions, and all the metadata you'd expect from a real filesystem.
+- `module/`: Redis module (`fs.so`) implementing `FS.*` commands and
+  filesystem storage in one key.
+- `mount/redis-fs-mount`: FUSE daemon that translates Linux file ops to
+  `FS.*` commands.
+- `rfs`: CLI orchestrator (recommended entrypoint) for bringing
+  up Redis + mount daemons, status, teardown, and in-place migration.
 
-The commands are named after their Unix counterparts. If you know
-`cat`, `ls`, `mkdir`, `grep` — you already know this module.
+## Recommended Workflow (CLI-first)
 
-Each filesystem lives under one key. Multiple filesystems are just
-multiple keys. No key prefix schemes, no naming conventions, no
-cleanup scripts. `DEL myfs` and the whole filesystem is gone.
+1. Build everything:
 
-## Installation
+       make
 
-Build with:
+2. Run the interactive setup
 
+        ./rfs setup
+
+3. Start managed services: 
+
+        ./rfs up
+
+3. Check status:
+
+        ./rfs status
+
+4. Stop managed services:
+
+       ./rfs down
+
+For migrating an existing local directory in place:
+
+        ./rfs migrate <directory>
+
+`migrate` imports files into Redis, renames the original directory to
+`<dir>.archive`, and mounts Redis back at the original path.
+
+## Project Layout
+
+- `module/Makefile`: builds `module/fs.so`.
+- `mount/Makefile`: builds `mount/redis-fs-mount`.
+- `cli/Makefile`: builds `rfs` (output to repo root).
+- root `Makefile`: orchestrator for all three.
+
+Useful root targets:
+
+- `make`: build module + mount binaries.
+- `make module`: build only `module/fs.so`.
+- `make mount`: build only mount binaries.
+- `make clean`: clean all generated artifacts.
+
+## Manual/Direct Setup (without `rfs`)
+
+If you want full manual control:
+
+    # Build
     make
 
-Then load the module with the following command line, or by inserting
-the needed directives in the `redis.conf` file:
+    # Start Redis with module loaded
+    ~/git/redis/src/redis-server --port 6379 --loadmodule ./module/fs.so
 
-    redis-server --loadmodule ./fs.so
+    # Seed a key
+    redis-cli -p 6379 FS.ECHO myfs /hello.txt "Hello, World!"
 
-Or if Redis is already running with module loading enabled:
+    # Mount
+    mkdir -p /tmp/mnt
+    ./mount/redis-fs-mount --foreground myfs /tmp/mnt
 
-    MODULE LOAD /path/to/fs.so
-
-## Quick start
-
-    > FS.ECHO myfs /hello.txt "Hello, World!"
-    OK
-
-    > FS.CAT myfs /hello.txt
-    "Hello, World!"
-
-    > FS.MKDIR myfs /etc/nginx PARENTS
-    OK
-
-    > FS.ECHO myfs /etc/nginx/nginx.conf "worker_processes auto;"
-    OK
-
-    > FS.LS myfs /
-    1) "hello.txt"
-    2) "etc"
-
-    > FS.TREE myfs /
-    1) "/"
-    2) 1) "hello.txt"
-       2) 1) "etc/"
-          2) 1) 1) "nginx/"
-                2) 1) "nginx.conf"
-
-    > FS.FIND myfs / "*.conf"
-    1) "/etc/nginx/nginx.conf"
-
-    > FS.GREP myfs / "*worker*"
-    1) 1) "/etc/nginx/nginx.conf"
-       2) (integer) 1
-       3) "worker_processes auto;"
-
-    > FS.INFO myfs
-     1) "files"
-     2) (integer) 2
-     3) "directories"
-     4) (integer) 3
-     5) "symlinks"
-     6) (integer) 0
-     7) "total_data_bytes"
-     8) (integer) 35
-     9) "total_inodes"
-    10) (integer) 5
-
-## Unix to Redis command mapping
+## Module Command Mapping (Direct `FS.*` Usage)
 
 If you've used a terminal, you already know how to use this module.
 The commands are the same — just prefixed with `FS.` and taking a
@@ -850,7 +836,7 @@ Or use the Makefile:
 **Example:**
 
     # Start Redis with the module
-    redis-server --loadmodule ./fs.so
+    redis-server --loadmodule ./module/fs.so
 
     # Seed some data
     redis-cli FS.ECHO myfs /hello.txt "Hello World"
@@ -884,6 +870,38 @@ Or use the Makefile:
 | `--allow-other` | `false` | Allow other users to access mount |
 | `--foreground` | `true` | Run in foreground |
 | `--debug` | `false` | Enable FUSE debug logging (very verbose) |
+
+## CLI Orchestrator
+
+The `mount/` directory also provides `rfs`, an interactive
+wizard that can start Redis + mount as daemons and manage their
+lifecycle.
+
+Build it:
+
+    cd mount
+    make rfs
+
+Use it:
+
+    # Interactive setup (prompts for Redis mode, mountpoint, key, etc.)
+    ./rfs up
+
+    # Show managed process + mount status
+    ./rfs status
+
+    # Migrate an existing local directory into Redis and mount in place
+    ./rfs migrate
+
+    # Unmount + stop managed daemons
+    ./rfs down
+
+`up` stores state in `~/.rfs/state.json` so later commands can
+control the same processes across shell sessions.
+
+`migrate` imports files into the selected Redis key, renames the source
+directory to `<source>.archive` (or your chosen archive path), then
+mounts the Redis-backed filesystem at the original source path.
 
 ## How it works
 

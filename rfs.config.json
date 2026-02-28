@@ -1,0 +1,15 @@
+{
+  "useExistingRedis": false,
+  "redisAddr": "localhost:6379",
+  "redisPassword": "",
+  "redisDB": 0,
+  "redisKey": "apple",
+  "mountpoint": "/home/ubuntu/apple",
+  "readOnly": false,
+  "allowOther": false,
+  "redisServerBin": "/home/ubuntu/git/redis/src/redis-server",
+  "modulePath": "/home/ubuntu/git/redis-fs/module/fs.so",
+  "mountBin": "/home/ubuntu/git/redis-fs/mount/redis-fs-mount",
+  "redisLog": "/tmp/rfs-redis.log",
+  "mountLog": "/tmp/rfs-mount.log"
+}

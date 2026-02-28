@@ -9,7 +9,10 @@
 #ifndef REDIS_FS_H
 #define REDIS_FS_H
 
-/* System headers first (POSIX macros defined via compiler flags) */
+/* POSIX feature test macros — must come before any system headers. */
+#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE
+
 #include <stdio.h>
 #include <stdint.h>
 #include <strings.h>

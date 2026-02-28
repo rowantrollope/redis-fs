@@ -5,15 +5,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Test
 
 ```bash
-make                # build fs.so (the Redis module)
-make clean          # remove compiled artifacts (*.xo, *.so)
+make                # build module/fs.so + mount/redis-fs-mount + rfs
+make module         # build module/fs.so only
+make mount          # build mount/redis-fs-mount only
+make cli            # build rfs only
+make clean          # remove compiled artifacts
+
+# CLI lifecycle helper:
+./rfs setup
+./rfs up
+./rfs down
+./rfs status
+./rfs migrate <directory>
 ```
 
 Load into Redis for manual testing:
 ```bash
-redis-server --loadmodule ./fs.so
+redis-server --loadmodule ./module/fs.so
 # or at runtime:
-redis-cli MODULE LOAD $(pwd)/fs.so
+redis-cli MODULE LOAD $(pwd)/module/fs.so
 ```
 
 There is no automated test suite. Testing is manual via `redis-cli`.
@@ -32,11 +42,11 @@ Redis-FS is a native Redis module (C, `-std=c11`) that registers a custom data t
 
 | File | Purpose |
 |------|---------|
-| `fs.c` | All command handlers, RDB persistence, type registration, bloom filter logic |
-| `fs.h` | Inode/object struct definitions, type constants |
-| `path.c` | Path normalization, parent/basename/join, full glob matching (`*`, `?`, `[a-z]`, `[!x]`, `\` escaping) |
-| `path.h` | Path utility declarations |
-| `redismodule.h` | Redis module API (vendored header) |
+| `module/fs.c` | All command handlers, RDB persistence, type registration, bloom filter logic |
+| `module/fs.h` | Inode/object struct definitions, type constants |
+| `module/path.c` | Path normalization, parent/basename/join, full glob matching (`*`, `?`, `[a-z]`, `[!x]`, `\` escaping) |
+| `module/path.h` | Path utility declarations |
+| `module/redismodule.h` | Redis module API (vendored header) |
 
 ### Key Internals
 

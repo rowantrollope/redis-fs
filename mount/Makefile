@@ -6,4 +6,4 @@ redis-fs-mount:
 clean:
 	rm -f redis-fs-mount
 
-.PHONY: all clean
+.PHONY: all clean redis-fs-mount

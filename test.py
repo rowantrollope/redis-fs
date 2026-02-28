@@ -11,7 +11,7 @@ Follows the conventions of the Redis vector-sets test suite:
 
 Usage:
     # Start Redis with the module loaded first:
-    #   redis-server --loadmodule ./fs.so --enable-debug-command yes
+    #   redis-server --loadmodule ./module/fs.so --enable-debug-command yes
     #
     python3 test.py [--port 6379]
 """
@@ -62,7 +62,7 @@ def check_module_loaded(r):
     if "fs" not in names:
         print(colored(
             "ERROR: The 'fs' module is not loaded. "
-            "Start Redis with: redis-server --loadmodule ./fs.so", "red"))
+            "Start Redis with: redis-server --loadmodule ./module/fs.so", "red"))
         sys.exit(1)
 
 
