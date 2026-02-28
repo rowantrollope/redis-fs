@@ -8,9 +8,11 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Copy and build the Redis module
-COPY fs.c fs.h path.c path.h redismodule.h Makefile ./
-RUN make
+# Copy module source (now in module/ directory)
+COPY module/ ./
+
+# Clean and rebuild for Linux
+RUN make clean && make
 
 # Configure Redis to load the module
 CMD ["redis-server", "--loadmodule", "/app/fs.so"]

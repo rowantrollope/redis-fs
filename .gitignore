@@ -4,6 +4,8 @@
 *.dSYM/
 rfs
 mount/redis-fs-mount
+sandbox/sandbox
+sandbox/sandbox-cli
 
 # Python
 __pycache__/
