@@ -808,8 +808,10 @@ func applyMetadata(ctx context.Context, rdb *redis.Client, key, path string, inf
 		if err := rdb.Do(ctx, "FS.CHOWN", key, path, st.Uid, st.Gid).Err(); err != nil {
 			return fmt.Errorf("FS.CHOWN %s: %w", path, err)
 		}
-		atimeMs := st.Atim.Sec*1000 + st.Atim.Nsec/1_000_000
-		mtimeMs := st.Mtim.Sec*1000 + st.Mtim.Nsec/1_000_000
+		aSec, aNsec := statAtime(st)
+		mSec, mNsec := statMtime(st)
+		atimeMs := aSec*1000 + aNsec/1_000_000
+		mtimeMs := mSec*1000 + mNsec/1_000_000
 		if err := rdb.Do(ctx, "FS.UTIMENS", key, path, atimeMs, mtimeMs).Err(); err != nil {
 			return fmt.Errorf("FS.UTIMENS %s: %w", path, err)
 		}

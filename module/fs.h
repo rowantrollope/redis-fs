@@ -10,7 +10,7 @@
 #define REDIS_FS_H
 
 /* POSIX feature test macros — must come before any system headers. */
-#define _POSIX_C_SOURCE 199309L
+#define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 
 #include "redismodule.h"
