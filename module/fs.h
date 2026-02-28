@@ -13,10 +13,12 @@
 #define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 
-#include "redismodule.h"
+#include <stdio.h>
 #include <stdint.h>
 #include <strings.h>
 #include <time.h>
+
+#include "redismodule.h"
 
 /* Inode types. */
 #define FS_INODE_FILE    0
