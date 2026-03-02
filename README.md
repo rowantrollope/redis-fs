@@ -932,6 +932,101 @@ round-trips.
 All files appear owned by the mounting user's uid/gid, regardless of
 what's stored in Redis (avoids permission issues for local use).
 
+# Agent Integration
+
+Redis-FS is designed for AI agents to store memories, documents, state, and tasks. We provide multiple integration options:
+
+## Python Library
+
+Install with pip:
+
+    pip install -e ".[mcp]"
+
+Use in your code:
+
+```python
+from redis_fs import RedisFS
+import redis
+
+r = redis.Redis()
+fs = RedisFS(r, "agent-memory")
+
+# Write and read
+fs.write("/memories/context.md", "# Session Context\n...")
+content = fs.read("/memories/context.md")
+
+# Line-based editing (agent-friendly)
+fs.replace("/tasks/todo.md", "- [ ] Task 1", "- [x] Task 1")
+fs.insert("/notes/log.md", -1, "New entry\n")  # Append
+fs.delete_lines("/draft.md", 10, 15)
+
+# Search and navigate
+files = fs.find("/", "*.md", type="file")
+matches = fs.grep("/notes", "*TODO*", nocase=True)
+```
+
+## CLI
+
+The `redis-fs` command provides Unix-like access:
+
+    redis-fs cat myfs /file.txt
+    redis-fs ls myfs /notes -l
+    redis-fs grep myfs / "*TODO*" --nocase
+    redis-fs replace myfs /file.md "old" "new" --all
+    redis-fs echo myfs /log.txt "new line" --append
+
+## MCP Server
+
+For Claude, Auggie, and other MCP-compatible agents:
+
+    # Start with Docker
+    make mcp-up
+
+    # Add to Auggie CLI
+    make install-mcp-auggie
+
+Or configure Claude Desktop (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "redis-fs": {
+      "command": "redis-fs-mcp",
+      "args": ["--transport", "http", "--port", "8089"]
+    }
+  }
+}
+```
+
+Available MCP tools: `fs_read`, `fs_write`, `fs_append`, `fs_lines`, `fs_replace`, `fs_insert`, `fs_delete_lines`, `fs_ls`, `fs_find`, `fs_grep`, `fs_mkdir`, `fs_rm`, `fs_info`
+
+## Agent Skill
+
+Install the skill for agent discovery:
+
+    # Install to all agents (Claude Code, Cursor, Codex, etc.)
+    make install-skill
+
+    # Or just Claude Code
+    make install-skill-local
+
+The skill teaches agents:
+- **When to use**: memories, markdown, state, tasks, logs
+- **When NOT to use**: binaries, scripts, executables (can't run them)
+- **All commands** with examples
+
+## Docker Quick Start
+
+    # Start Redis + MCP server
+    make mcp-up
+
+    # Test it
+    curl http://localhost:8089/health
+    redis-fs --port 6379 echo test /hello.txt "Hello!"
+
+    # Stop
+    make mcp-down
+
 # What this module does NOT do
 
 - **FUSE mount**: See the [FUSE Mount](#fuse-mount) section below for `redis-fs-mount`, a Go daemon that mounts a Redis FS key as a real Linux filesystem.

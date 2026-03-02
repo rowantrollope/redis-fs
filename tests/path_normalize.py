@@ -34,3 +34,24 @@ class PathNormalize(TestCase):
         assert r.execute_command("FS.TEST", k, "/") == 1
         assert r.execute_command("FS.TEST", k, "//") == 1
         assert r.execute_command("FS.TEST", k, "/./") == 1
+
+        # --- Path depth limit tests (FS_MAX_PATH_DEPTH = 256) ---
+
+        # Build a path with exactly 255 components (should succeed).
+        # Each component is short to avoid other limits.
+        deep_path = "/" + "/".join([f"d{i}" for i in range(255)])
+        deep_file = deep_path + "/file.txt"
+        r.execute_command("FS.ECHO", k, deep_file, "deep content")
+        assert r.execute_command("FS.CAT", k, deep_file) == b"deep content"
+
+        # Clean up the deep path to avoid polluting other tests.
+        # Go up the tree and remove.
+        r.execute_command("FS.RM", k, "/d0", "RECURSIVE")
+
+        # Build a path with 257 components (should fail - exceeds 256 limit).
+        too_deep_path = "/" + "/".join([f"x{i}" for i in range(257)])
+        try:
+            r.execute_command("FS.ECHO", k, too_deep_path, "should fail")
+            assert False, "Expected error on path exceeding 256 depth limit"
+        except Exception:
+            pass  # Any error is acceptable

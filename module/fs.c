@@ -52,7 +52,6 @@
 #include "fs.h"
 #include "path.h"
 #include <string.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <errno.h>
@@ -996,6 +995,723 @@ static int CAT_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int a
 
     return RedisModule_ReplyWithStringBuffer(ctx, inode->payload.file.data,
                                               inode->payload.file.size);
+}
+
+/* ===================================================================
+ * FS.LINES key path [start [end]]
+ *
+ * Read specific line range from a file.
+ * Lines are 1-indexed. End can be -1 to mean "to the end".
+ * Returns the content of the specified lines.
+ * =================================================================== */
+static int LINES_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    RedisModule_AutoMemory(ctx);
+    if (argc < 3 || argc > 5) return RedisModule_WrongArity(ctx);
+
+    RedisModuleKey *key;
+    fsObject *fs = fsGetObject(ctx, argv[1], REDISMODULE_READ, &key);
+    if (!key) return REDISMODULE_OK;
+    if (!fs) return RedisModule_ReplyWithNull(ctx);
+
+    size_t pathlen;
+    const char *rawpath = RedisModule_StringPtrLen(argv[2], &pathlen);
+    char *path = fsNormalizePath(rawpath, pathlen);
+
+    // Resolve symlinks.
+    int err;
+    char *resolved = fsResolvePath(fs, path, strlen(path), &err);
+    RedisModule_Free(path);
+    if (err) return RedisModule_ReplyWithError(ctx, "ERR too many levels of symbolic links");
+
+    fsInode *inode = fsLookup(fs, resolved, strlen(resolved));
+    RedisModule_Free(resolved);
+
+    if (!inode)
+        return RedisModule_ReplyWithNull(ctx);
+    if (inode->type != FS_INODE_FILE)
+        return RedisModule_ReplyWithError(ctx, "ERR not a file");
+
+    inode->atime = fsNowMs();
+
+    // If no range specified, return entire file.
+    if (argc == 3) {
+        return RedisModule_ReplyWithStringBuffer(ctx, inode->payload.file.data,
+                                                  inode->payload.file.size);
+    }
+
+    // Parse start line.
+    long long start = 1;
+    if (argc >= 4) {
+        if (RedisModule_StringToLongLong(argv[3], &start) != REDISMODULE_OK)
+            return RedisModule_ReplyWithError(ctx, "ERR invalid start line");
+        if (start <= 0)
+            return RedisModule_ReplyWithError(ctx, "ERR start line must be >= 1");
+    }
+
+    // Parse end line (-1 means to the end).
+    long long end = -1;
+    if (argc == 5) {
+        if (RedisModule_StringToLongLong(argv[4], &end) != REDISMODULE_OK)
+            return RedisModule_ReplyWithError(ctx, "ERR invalid end line");
+        if (end < -1 || end == 0)
+            return RedisModule_ReplyWithError(ctx, "ERR end line must be >= 1 or -1");
+    }
+
+    // Handle empty file.
+    if (inode->payload.file.size == 0)
+        return RedisModule_ReplyWithStringBuffer(ctx, "", 0);
+
+    const char *data = inode->payload.file.data;
+    size_t size = inode->payload.file.size;
+
+    // Find line boundaries.
+    // Count lines and record start positions.
+    long long linenum = 1;
+    const char *line_start = data;
+    const char *result_start = NULL;
+    const char *result_end = NULL;
+
+    for (size_t i = 0; i <= size; i++) {
+        int is_end = (i == size);
+        int is_newline = (!is_end && data[i] == '\n');
+
+        if (is_newline || is_end) {
+            // End of line linenum at position i.
+            if (linenum == start) {
+                result_start = line_start;
+            }
+            if (linenum >= start && (end == -1 || linenum <= end)) {
+                result_end = data + i;
+            }
+            if (end != -1 && linenum > end) {
+                break;
+            }
+            linenum++;
+            line_start = data + i + 1;
+        }
+    }
+
+    if (!result_start || !result_end) {
+        // Start line beyond file.
+        return RedisModule_ReplyWithStringBuffer(ctx, "", 0);
+    }
+
+    size_t result_len = result_end - result_start;
+    return RedisModule_ReplyWithStringBuffer(ctx, result_start, result_len);
+}
+
+/* ===================================================================
+ * FS.REPLACE key path old_str new_str [ALL] [LINE start end]
+ *
+ * Replace exact string in a file.
+ * Returns the number of replacements made.
+ * =================================================================== */
+static int REPLACE_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    RedisModule_AutoMemory(ctx);
+    if (argc < 5) return RedisModule_WrongArity(ctx);
+
+    RedisModuleKey *key;
+    fsObject *fs = fsGetObject(ctx, argv[1], REDISMODULE_READ|REDISMODULE_WRITE, &key);
+    if (!key) return REDISMODULE_OK;
+    if (!fs) return RedisModule_ReplyWithNull(ctx);
+
+    size_t pathlen;
+    const char *rawpath = RedisModule_StringPtrLen(argv[2], &pathlen);
+    char *path = fsNormalizePath(rawpath, pathlen);
+
+    // Resolve symlinks.
+    int err;
+    char *resolved = fsResolvePath(fs, path, strlen(path), &err);
+    RedisModule_Free(path);
+    if (err) return RedisModule_ReplyWithError(ctx, "ERR too many levels of symbolic links");
+
+    fsInode *inode = fsLookup(fs, resolved, strlen(resolved));
+    RedisModule_Free(resolved);
+
+    if (!inode)
+        return RedisModule_ReplyWithNull(ctx);
+    if (inode->type != FS_INODE_FILE)
+        return RedisModule_ReplyWithError(ctx, "ERR not a file");
+
+    size_t oldlen, newlen;
+    const char *oldstr = RedisModule_StringPtrLen(argv[3], &oldlen);
+    const char *newstr = RedisModule_StringPtrLen(argv[4], &newlen);
+
+    if (oldlen == 0)
+        return RedisModule_ReplyWithError(ctx, "ERR search string cannot be empty");
+
+    // Parse optional flags.
+    int replace_all = 0;
+    long long line_start = 0, line_end = 0;
+    int have_line_constraint = 0;
+
+    for (int i = 5; i < argc; i++) {
+        size_t flaglen;
+        const char *flag = RedisModule_StringPtrLen(argv[i], &flaglen);
+        if (flaglen == 3 && strncasecmp(flag, "ALL", 3) == 0) {
+            replace_all = 1;
+        } else if (flaglen == 4 && strncasecmp(flag, "LINE", 4) == 0) {
+            if (i + 2 >= argc)
+                return RedisModule_ReplyWithError(ctx, "ERR LINE requires start and end arguments");
+            if (RedisModule_StringToLongLong(argv[i+1], &line_start) != REDISMODULE_OK ||
+                RedisModule_StringToLongLong(argv[i+2], &line_end) != REDISMODULE_OK)
+                return RedisModule_ReplyWithError(ctx, "ERR invalid LINE range");
+            if (line_start < 1 || line_end < line_start)
+                return RedisModule_ReplyWithError(ctx, "ERR invalid LINE range");
+            have_line_constraint = 1;
+            i += 2;
+        }
+    }
+
+    const char *data = inode->payload.file.data;
+    size_t size = inode->payload.file.size;
+
+    // Build result buffer.
+    size_t capacity = size + 256;
+    char *result = RedisModule_Alloc(capacity);
+    size_t result_len = 0;
+    long long replacements = 0;
+    long long current_line = 1;
+    size_t line_start_pos = 0;
+
+    for (size_t i = 0; i <= size; ) {
+        // Track line boundaries for LINE constraint.
+        if (i < size && data[i] == '\n') {
+            current_line++;
+            line_start_pos = i + 1;
+        }
+
+        // Check if we're within line constraint.
+        int in_range = 1;
+        if (have_line_constraint) {
+            in_range = (current_line >= line_start && current_line <= line_end);
+        }
+
+        // Try to match oldstr at position i.
+        int match = 0;
+        if (in_range && i + oldlen <= size && (replace_all || replacements == 0)) {
+            if (memcmp(data + i, oldstr, oldlen) == 0) {
+                match = 1;
+            }
+        }
+
+        if (match) {
+            // Ensure capacity for new string.
+            while (result_len + newlen + (size - i - oldlen) + 1 > capacity) {
+                capacity *= 2;
+                result = RedisModule_Realloc(result, capacity);
+            }
+            memcpy(result + result_len, newstr, newlen);
+            result_len += newlen;
+            i += oldlen;
+            replacements++;
+        } else if (i < size) {
+            // Copy character.
+            if (result_len + 1 >= capacity) {
+                capacity *= 2;
+                result = RedisModule_Realloc(result, capacity);
+            }
+            result[result_len++] = data[i];
+            i++;
+        } else {
+            break;
+        }
+    }
+
+    // Update file if replacements were made.
+    if (replacements > 0) {
+        size_t old_size = inode->payload.file.size;
+        fsFileSetData(inode, result, result_len);
+        fs->total_data_size = fs->total_data_size - old_size + result_len;
+        inode->mtime = fsNowMs();
+        RedisModule_ReplicateVerbatim(ctx);
+    }
+
+    RedisModule_Free(result);
+    return RedisModule_ReplyWithLongLong(ctx, replacements);
+}
+
+/* ===================================================================
+ * FS.INSERT key path line_num content
+ *
+ * Insert content after line_num. Line 0 means insert at beginning.
+ * Line -1 means append at end. Returns OK.
+ * =================================================================== */
+static int INSERT_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    RedisModule_AutoMemory(ctx);
+    if (argc != 5) return RedisModule_WrongArity(ctx);
+
+    RedisModuleKey *key;
+    fsObject *fs = fsGetObject(ctx, argv[1], REDISMODULE_READ|REDISMODULE_WRITE, &key);
+    if (!key) return REDISMODULE_OK;
+    // fs is guaranteed non-NULL for write-mode opens (auto-created).
+
+    size_t pathlen;
+    const char *rawpath = RedisModule_StringPtrLen(argv[2], &pathlen);
+    char *path = fsNormalizePath(rawpath, pathlen);
+
+    // Parse line number.
+    long long line_num;
+    if (RedisModule_StringToLongLong(argv[3], &line_num) != REDISMODULE_OK) {
+        RedisModule_Free(path);
+        return RedisModule_ReplyWithError(ctx, "ERR invalid line number");
+    }
+    if (line_num < -1) {
+        RedisModule_Free(path);
+        return RedisModule_ReplyWithError(ctx, "ERR line number must be >= 0 or -1");
+    }
+
+    size_t contentlen;
+    const char *content = RedisModule_StringPtrLen(argv[4], &contentlen);
+
+    // Resolve symlinks.
+    int err;
+    char *resolved = fsResolvePath(fs, path, strlen(path), &err);
+    RedisModule_Free(path);
+    if (err) return RedisModule_ReplyWithError(ctx, "ERR too many levels of symbolic links");
+
+    fsInode *inode = fsLookup(fs, resolved, strlen(resolved));
+
+    // If file doesn't exist, create it.
+    if (!inode) {
+        // Ensure parent directories exist.
+        if (fsEnsureParents(fs, resolved, strlen(resolved)) != 0) {
+            RedisModule_Free(resolved);
+            return RedisModule_ReplyWithError(ctx, "ERR cannot create parent directories");
+        }
+        inode = fsInodeCreate(FS_INODE_FILE, 0);
+        RedisModule_DictSetC(fs->inodes, resolved, strlen(resolved), inode);
+        fs->file_count++;
+        // Add to parent.
+        char *parent = fsParentPath(resolved, strlen(resolved));
+        fsInode *parent_inode = fsLookup(fs, parent, strlen(parent));
+        if (parent_inode && parent_inode->type == FS_INODE_DIR) {
+            char *base = fsBaseName(resolved, strlen(resolved));
+            fsDirAddChild(parent_inode, base, strlen(base));
+            RedisModule_Free(base);
+        }
+        RedisModule_Free(parent);
+    }
+
+    RedisModule_Free(resolved);
+
+    if (inode->type != FS_INODE_FILE)
+        return RedisModule_ReplyWithError(ctx, "ERR not a file");
+
+    const char *data = inode->payload.file.data;
+    size_t size = inode->payload.file.size;
+
+    // Find insertion point.
+    size_t insert_pos = 0;
+    if (line_num == -1 || size == 0) {
+        // Append at end.
+        insert_pos = size;
+    } else if (line_num == 0) {
+        // Insert at beginning.
+        insert_pos = 0;
+    } else {
+        // Find end of line_num.
+        long long current_line = 1;
+        for (size_t i = 0; i < size; i++) {
+            if (data[i] == '\n') {
+                if (current_line == line_num) {
+                    insert_pos = i + 1;
+                    break;
+                }
+                current_line++;
+            }
+            if (i == size - 1) {
+                // Reached end of file.
+                insert_pos = size;
+            }
+        }
+        if (current_line < line_num) {
+            // Line number beyond file, append at end.
+            insert_pos = size;
+        }
+    }
+
+    // Build new content.
+    int need_newline_before = (insert_pos > 0 && insert_pos == size &&
+                               size > 0 && data[size-1] != '\n');
+    int need_newline_after = (insert_pos < size && contentlen > 0 &&
+                              content[contentlen-1] != '\n');
+
+    size_t new_size = size + contentlen + (need_newline_before ? 1 : 0) +
+                      (need_newline_after ? 1 : 0);
+    char *new_data = RedisModule_Alloc(new_size + 1);
+    size_t pos = 0;
+
+    // Copy before insertion point.
+    memcpy(new_data, data, insert_pos);
+    pos = insert_pos;
+
+    // Add newline before if needed.
+    if (need_newline_before) {
+        new_data[pos++] = '\n';
+    }
+
+    // Insert content.
+    memcpy(new_data + pos, content, contentlen);
+    pos += contentlen;
+
+    // Add newline after if needed.
+    if (need_newline_after) {
+        new_data[pos++] = '\n';
+    }
+
+    // Copy after insertion point.
+    memcpy(new_data + pos, data + insert_pos, size - insert_pos);
+    pos += size - insert_pos;
+
+    size_t old_size = inode->payload.file.size;
+    fsFileSetData(inode, new_data, pos);
+    fs->total_data_size = fs->total_data_size - old_size + pos;
+    inode->mtime = fsNowMs();
+
+    RedisModule_Free(new_data);
+    RedisModule_ReplicateVerbatim(ctx);
+
+    return RedisModule_ReplyWithSimpleString(ctx, "OK");
+}
+
+/* ===================================================================
+ * FS.DELETELINES key path start end
+ *
+ * Delete lines from start to end (inclusive, 1-indexed).
+ * Returns the number of lines deleted.
+ * =================================================================== */
+static int DELETELINES_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    RedisModule_AutoMemory(ctx);
+    if (argc != 5) return RedisModule_WrongArity(ctx);
+
+    RedisModuleKey *key;
+    fsObject *fs = fsGetObject(ctx, argv[1], REDISMODULE_READ|REDISMODULE_WRITE, &key);
+    if (!key) return REDISMODULE_OK;
+    if (!fs) return RedisModule_ReplyWithNull(ctx);
+
+    size_t pathlen;
+    const char *rawpath = RedisModule_StringPtrLen(argv[2], &pathlen);
+    char *path = fsNormalizePath(rawpath, pathlen);
+
+    long long start, end;
+    if (RedisModule_StringToLongLong(argv[3], &start) != REDISMODULE_OK ||
+        RedisModule_StringToLongLong(argv[4], &end) != REDISMODULE_OK) {
+        RedisModule_Free(path);
+        return RedisModule_ReplyWithError(ctx, "ERR invalid line number");
+    }
+    if (start < 1) {
+        RedisModule_Free(path);
+        return RedisModule_ReplyWithError(ctx, "ERR start line must be >= 1");
+    }
+    if (end < start) {
+        RedisModule_Free(path);
+        return RedisModule_ReplyWithError(ctx, "ERR end line must be >= start line");
+    }
+
+    // Resolve symlinks.
+    int err;
+    char *resolved = fsResolvePath(fs, path, strlen(path), &err);
+    RedisModule_Free(path);
+    if (err) return RedisModule_ReplyWithError(ctx, "ERR too many levels of symbolic links");
+
+    fsInode *inode = fsLookup(fs, resolved, strlen(resolved));
+    RedisModule_Free(resolved);
+
+    if (!inode)
+        return RedisModule_ReplyWithNull(ctx);
+    if (inode->type != FS_INODE_FILE)
+        return RedisModule_ReplyWithError(ctx, "ERR not a file");
+
+    const char *data = inode->payload.file.data;
+    size_t size = inode->payload.file.size;
+
+    if (size == 0)
+        return RedisModule_ReplyWithLongLong(ctx, 0);
+
+    // Find line boundaries.
+    size_t delete_start = 0, delete_end = 0;
+    long long current_line = 1;
+    size_t line_begin = 0;
+    int found_start = 0, found_end = 0;
+    long long lines_deleted = 0;
+
+    for (size_t i = 0; i <= size; i++) {
+        int is_end = (i == size);
+        int is_newline = (!is_end && data[i] == '\n');
+
+        if (is_newline || is_end) {
+            // Line current_line goes from line_begin to i (inclusive of newline if present).
+            if (current_line == start) {
+                delete_start = line_begin;
+                found_start = 1;
+            }
+            if (current_line >= start && current_line <= end) {
+                // Include the newline in deletion if present.
+                delete_end = is_newline ? i + 1 : i;
+                found_end = 1;
+                lines_deleted++;
+            }
+            current_line++;
+            line_begin = i + 1;
+        }
+    }
+
+    if (!found_start || !found_end) {
+        return RedisModule_ReplyWithLongLong(ctx, 0);
+    }
+
+    // Build new content without the deleted lines.
+    size_t new_size = size - (delete_end - delete_start);
+    char *new_data = RedisModule_Alloc(new_size + 1);
+    memcpy(new_data, data, delete_start);
+    memcpy(new_data + delete_start, data + delete_end, size - delete_end);
+
+    // Remove trailing newline if we deleted to end and there's a trailing newline.
+    if (new_size > 0 && new_data[new_size - 1] == '\n' && delete_end == size) {
+        // Don't remove - keep file consistent.
+    }
+
+    size_t old_size = inode->payload.file.size;
+    fsFileSetData(inode, new_data, new_size);
+    fs->total_data_size = fs->total_data_size - old_size + new_size;
+    inode->mtime = fsNowMs();
+
+    RedisModule_Free(new_data);
+    RedisModule_ReplicateVerbatim(ctx);
+
+    return RedisModule_ReplyWithLongLong(ctx, lines_deleted);
+}
+
+/* ===================================================================
+ * FS.HEAD key path [n]
+ *
+ * Return the first N lines of a file (default 10).
+ * =================================================================== */
+static int HEAD_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    RedisModule_AutoMemory(ctx);
+    if (argc < 3 || argc > 4) return RedisModule_WrongArity(ctx);
+
+    RedisModuleKey *key;
+    fsObject *fs = fsGetObject(ctx, argv[1], REDISMODULE_READ, &key);
+    if (!key) return REDISMODULE_OK;
+    if (!fs) return RedisModule_ReplyWithNull(ctx);
+
+    size_t pathlen;
+    const char *rawpath = RedisModule_StringPtrLen(argv[2], &pathlen);
+    char *path = fsNormalizePath(rawpath, pathlen);
+
+    long long n = 10;  // Default to 10 lines.
+    if (argc == 4) {
+        if (RedisModule_StringToLongLong(argv[3], &n) != REDISMODULE_OK) {
+            RedisModule_Free(path);
+            return RedisModule_ReplyWithError(ctx, "ERR invalid line count");
+        }
+        if (n < 0) {
+            RedisModule_Free(path);
+            return RedisModule_ReplyWithError(ctx, "ERR line count must be >= 0");
+        }
+    }
+
+    // Resolve symlinks.
+    int err;
+    char *resolved = fsResolvePath(fs, path, strlen(path), &err);
+    RedisModule_Free(path);
+    if (err) return RedisModule_ReplyWithError(ctx, "ERR too many levels of symbolic links");
+
+    fsInode *inode = fsLookup(fs, resolved, strlen(resolved));
+    RedisModule_Free(resolved);
+
+    if (!inode)
+        return RedisModule_ReplyWithNull(ctx);
+    if (inode->type != FS_INODE_FILE)
+        return RedisModule_ReplyWithError(ctx, "ERR not a file");
+
+    inode->atime = fsNowMs();
+
+    if (n == 0 || inode->payload.file.size == 0)
+        return RedisModule_ReplyWithStringBuffer(ctx, "", 0);
+
+    const char *data = inode->payload.file.data;
+    size_t size = inode->payload.file.size;
+
+    // Find end of line N.
+    long long current_line = 1;
+    size_t end_pos = size;
+
+    for (size_t i = 0; i < size; i++) {
+        if (data[i] == '\n') {
+            if (current_line == n) {
+                end_pos = i;
+                break;
+            }
+            current_line++;
+        }
+    }
+
+    return RedisModule_ReplyWithStringBuffer(ctx, data, end_pos);
+}
+
+/* ===================================================================
+ * FS.TAIL key path [n]
+ *
+ * Return the last N lines of a file (default 10).
+ * =================================================================== */
+static int TAIL_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    RedisModule_AutoMemory(ctx);
+    if (argc < 3 || argc > 4) return RedisModule_WrongArity(ctx);
+
+    RedisModuleKey *key;
+    fsObject *fs = fsGetObject(ctx, argv[1], REDISMODULE_READ, &key);
+    if (!key) return REDISMODULE_OK;
+    if (!fs) return RedisModule_ReplyWithNull(ctx);
+
+    size_t pathlen;
+    const char *rawpath = RedisModule_StringPtrLen(argv[2], &pathlen);
+    char *path = fsNormalizePath(rawpath, pathlen);
+
+    long long n = 10;  // Default to 10 lines.
+    if (argc == 4) {
+        if (RedisModule_StringToLongLong(argv[3], &n) != REDISMODULE_OK) {
+            RedisModule_Free(path);
+            return RedisModule_ReplyWithError(ctx, "ERR invalid line count");
+        }
+        if (n < 0) {
+            RedisModule_Free(path);
+            return RedisModule_ReplyWithError(ctx, "ERR line count must be >= 0");
+        }
+    }
+
+    // Resolve symlinks.
+    int err;
+    char *resolved = fsResolvePath(fs, path, strlen(path), &err);
+    RedisModule_Free(path);
+    if (err) return RedisModule_ReplyWithError(ctx, "ERR too many levels of symbolic links");
+
+    fsInode *inode = fsLookup(fs, resolved, strlen(resolved));
+    RedisModule_Free(resolved);
+
+    if (!inode)
+        return RedisModule_ReplyWithNull(ctx);
+    if (inode->type != FS_INODE_FILE)
+        return RedisModule_ReplyWithError(ctx, "ERR not a file");
+
+    inode->atime = fsNowMs();
+
+    if (n == 0 || inode->payload.file.size == 0)
+        return RedisModule_ReplyWithStringBuffer(ctx, "", 0);
+
+    const char *data = inode->payload.file.data;
+    size_t size = inode->payload.file.size;
+
+    // Count total lines.
+    long long total_lines = 1;
+    for (size_t i = 0; i < size; i++) {
+        if (data[i] == '\n' && i < size - 1) total_lines++;
+    }
+
+    // If requesting more lines than exist, return all.
+    if (n >= total_lines)
+        return RedisModule_ReplyWithStringBuffer(ctx, data, size);
+
+    // Find start of line (total_lines - n + 1).
+    long long target_line = total_lines - n + 1;
+    long long current_line = 1;
+    size_t start_pos = 0;
+
+    for (size_t i = 0; i < size; i++) {
+        if (current_line == target_line) {
+            start_pos = i;
+            break;
+        }
+        if (data[i] == '\n') {
+            current_line++;
+            if (current_line == target_line) {
+                start_pos = i + 1;
+                break;
+            }
+        }
+    }
+
+    return RedisModule_ReplyWithStringBuffer(ctx, data + start_pos, size - start_pos);
+}
+
+/* ===================================================================
+ * FS.WC key path
+ *
+ * Return line, word, and character counts for a file.
+ * Returns: [lines, N, words, N, chars, N]
+ * =================================================================== */
+static int WC_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
+    RedisModule_AutoMemory(ctx);
+    if (argc != 3) return RedisModule_WrongArity(ctx);
+
+    RedisModuleKey *key;
+    fsObject *fs = fsGetObject(ctx, argv[1], REDISMODULE_READ, &key);
+    if (!key) return REDISMODULE_OK;
+    if (!fs) return RedisModule_ReplyWithNull(ctx);
+
+    size_t pathlen;
+    const char *rawpath = RedisModule_StringPtrLen(argv[2], &pathlen);
+    char *path = fsNormalizePath(rawpath, pathlen);
+
+    // Resolve symlinks.
+    int err;
+    char *resolved = fsResolvePath(fs, path, strlen(path), &err);
+    RedisModule_Free(path);
+    if (err) return RedisModule_ReplyWithError(ctx, "ERR too many levels of symbolic links");
+
+    fsInode *inode = fsLookup(fs, resolved, strlen(resolved));
+    RedisModule_Free(resolved);
+
+    if (!inode)
+        return RedisModule_ReplyWithNull(ctx);
+    if (inode->type != FS_INODE_FILE)
+        return RedisModule_ReplyWithError(ctx, "ERR not a file");
+
+    inode->atime = fsNowMs();
+
+    const char *data = inode->payload.file.data;
+    size_t size = inode->payload.file.size;
+
+    long long lines = 0, words = 0, chars = (long long)size;
+    int in_word = 0;
+
+    for (size_t i = 0; i < size; i++) {
+        unsigned char c = (unsigned char)data[i];
+
+        // Count newlines.
+        if (c == '\n') {
+            lines++;
+        }
+
+        // Count words (whitespace-separated).
+        int is_space = (c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
+                        c == '\v' || c == '\f');
+        if (is_space) {
+            in_word = 0;
+        } else {
+            if (!in_word) {
+                words++;
+                in_word = 1;
+            }
+        }
+    }
+
+    // Count last line if file doesn't end with newline.
+    if (size > 0 && data[size - 1] != '\n') {
+        lines++;
+    }
+
+    RedisModule_ReplyWithArray(ctx, 6);
+    RedisModule_ReplyWithCString(ctx, "lines");
+    RedisModule_ReplyWithLongLong(ctx, lines);
+    RedisModule_ReplyWithCString(ctx, "words");
+    RedisModule_ReplyWithLongLong(ctx, words);
+    RedisModule_ReplyWithCString(ctx, "chars");
+    RedisModule_ReplyWithLongLong(ctx, chars);
+
+    return REDISMODULE_OK;
 }
 
 /* ===================================================================
@@ -2489,6 +3205,34 @@ int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) 
 
     if (RedisModule_CreateCommand(ctx, "FS.CAT",
         CAT_RedisCommand, "readonly", 1, 1, 1) == REDISMODULE_ERR)
+        return REDISMODULE_ERR;
+
+    if (RedisModule_CreateCommand(ctx, "FS.LINES",
+        LINES_RedisCommand, "readonly", 1, 1, 1) == REDISMODULE_ERR)
+        return REDISMODULE_ERR;
+
+    if (RedisModule_CreateCommand(ctx, "FS.REPLACE",
+        REPLACE_RedisCommand, "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
+        return REDISMODULE_ERR;
+
+    if (RedisModule_CreateCommand(ctx, "FS.INSERT",
+        INSERT_RedisCommand, "write deny-oom", 1, 1, 1) == REDISMODULE_ERR)
+        return REDISMODULE_ERR;
+
+    if (RedisModule_CreateCommand(ctx, "FS.DELETELINES",
+        DELETELINES_RedisCommand, "write", 1, 1, 1) == REDISMODULE_ERR)
+        return REDISMODULE_ERR;
+
+    if (RedisModule_CreateCommand(ctx, "FS.HEAD",
+        HEAD_RedisCommand, "readonly", 1, 1, 1) == REDISMODULE_ERR)
+        return REDISMODULE_ERR;
+
+    if (RedisModule_CreateCommand(ctx, "FS.TAIL",
+        TAIL_RedisCommand, "readonly", 1, 1, 1) == REDISMODULE_ERR)
+        return REDISMODULE_ERR;
+
+    if (RedisModule_CreateCommand(ctx, "FS.WC",
+        WC_RedisCommand, "readonly", 1, 1, 1) == REDISMODULE_ERR)
         return REDISMODULE_ERR;
 
     if (RedisModule_CreateCommand(ctx, "FS.APPEND",

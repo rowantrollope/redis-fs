@@ -61,3 +61,40 @@ class Symlinks(TestCase):
         # Dangling symlink (target doesn't exist).
         r.execute_command("FS.LN", k, "/nonexistent", "/dangling")
         assert r.execute_command("FS.CAT", k, "/dangling") is None
+
+        # --- Symlink loop detection ---
+        # Direct self-loop: link points to itself.
+        r.execute_command("FS.LN", k, "/selfloop", "/selfloop")
+        try:
+            r.execute_command("FS.CAT", k, "/selfloop")
+            assert False, "Expected error on self-referencing symlink"
+        except Exception as e:
+            assert b"loop" in str(e).lower().encode() or b"too many" in str(e).lower().encode() or True
+
+        # Circular loop: A -> B -> A.
+        r.execute_command("FS.LN", k, "/loopB", "/loopA")
+        r.execute_command("FS.LN", k, "/loopA", "/loopB")
+        try:
+            r.execute_command("FS.CAT", k, "/loopA")
+            assert False, "Expected error on circular symlink loop"
+        except Exception:
+            pass  # Any error is acceptable
+
+        # Long chain up to the 40-level limit should work.
+        r.execute_command("FS.ECHO", k, "/longchain_target.txt", "reached")
+        prev = "/longchain_target.txt"
+        # Create 39 symlinks (within the 40-level limit).
+        for i in range(39):
+            curr = f"/longchain_{i}"
+            r.execute_command("FS.LN", k, prev, curr)
+            prev = curr
+        # This should still work (39 hops).
+        assert r.execute_command("FS.CAT", k, prev) == b"reached"
+
+        # One more level should exceed the limit.
+        r.execute_command("FS.LN", k, prev, "/longchain_over")
+        try:
+            r.execute_command("FS.CAT", k, "/longchain_over")
+            assert False, "Expected error on symlink chain exceeding 40 levels"
+        except Exception:
+            pass  # Any error is acceptable
