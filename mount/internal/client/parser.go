@@ -141,3 +141,24 @@ func parseOctalMode(s string) uint32 {
 	n, _ := strconv.ParseUint(s, 8, 32)
 	return uint32(n)
 }
+
+// WcResult holds word/line/char counts from a Wc operation.
+type WcResult struct {
+	Lines int64
+	Words int64
+	Chars int64
+}
+
+// TreeEntry holds one entry from a Tree walk.
+type TreeEntry struct {
+	Path  string
+	Type  string // "file", "dir", "symlink"
+	Depth int
+}
+
+// GrepMatch holds one grep result.
+type GrepMatch struct {
+	Path    string
+	LineNum int64
+	Line    string
+}

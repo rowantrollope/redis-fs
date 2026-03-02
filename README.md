@@ -1,16 +1,58 @@
 # Redis-FS
 
-Redis-FS is a Redis module + FUSE mount stack that lets you use a Redis
-key as a real filesystem.
+Redis-FS stores an entire filesystem inside standard Redis data structures
+(HASH and SET keys). No custom module required — it works with any Redis
+instance.
 
 This repository has three parts:
 
-- `module/`: Redis module (`fs.so`) implementing `FS.*` commands and
-  filesystem storage in one key.
+- `module/`: Optional Redis module (`fs.so`) implementing `FS.*` commands
+  for atomic operations (can be used as a performance/atomicity layer).
 - `mount/redis-fs-mount`: FUSE daemon that translates Linux file ops to
-  `FS.*` commands.
+  Redis commands via the native Go client.
 - `rfs`: CLI orchestrator (recommended entrypoint) for bringing
   up Redis + mount daemons, status, teardown, and in-place migration.
+
+## Architecture
+
+Redis-FS stores filesystem data in standard Redis HASH and SET keys:
+
+- **Inodes** are stored as HASHes: `rfs:{fsKey}:inode:<path>`
+- **Directory children** are stored as SETs: `rfs:{fsKey}:children:<path>`
+- **Aggregate info** is stored as a HASH: `rfs:{fsKey}:info`
+
+The `{fsKey}` hash tag ensures all keys for a filesystem hash to the same
+slot, enabling Redis Cluster support. Paths are stored directly in key
+names (no encoding), so data is inspectable with standard Redis commands:
+
+```
+redis-cli HGETALL "rfs:{myfs}:inode:/hello.txt"
+redis-cli SMEMBERS "rfs:{myfs}:children:/"
+redis-cli HGETALL "rfs:{myfs}:info"
+```
+
+### Key Format
+
+| Key pattern | Type | Purpose |
+|-------------|------|---------|
+| `rfs:{fsKey}:inode:<path>` | HASH | Inode metadata + content (type, mode, uid, gid, size, timestamps, content/target) |
+| `rfs:{fsKey}:children:<path>` | SET | Child basenames for directories |
+| `rfs:{fsKey}:info` | HASH | Aggregate counters (files, directories, symlinks, total_data_bytes) |
+
+### Inode HASH fields
+
+| Field | Description |
+|-------|-------------|
+| `type` | `file`, `dir`, or `symlink` |
+| `mode` | POSIX permission bits (decimal) |
+| `uid` | Owner user ID |
+| `gid` | Owner group ID |
+| `size` | Content length in bytes |
+| `ctime_ms` | Creation time (ms since epoch) |
+| `mtime_ms` | Modification time (ms since epoch) |
+| `atime_ms` | Access time (ms since epoch) |
+| `content` | File content (files only) |
+| `target` | Symlink target path (symlinks only) |
 
 ## Recommended Workflow (CLI-first)
 
@@ -62,15 +104,16 @@ If you want full manual control:
     # Build
     make
 
-    # Start Redis with module loaded
-    ~/git/redis/src/redis-server --port 6379 --loadmodule ./module/fs.so
-
-    # Seed a key
-    redis-cli -p 6379 FS.ECHO myfs /hello.txt "Hello, World!"
+    # Start any Redis server (no module needed)
+    redis-server --port 6379
 
     # Mount
     mkdir -p /tmp/mnt
     ./mount/redis-fs-mount --foreground myfs /tmp/mnt
+
+    # Use it
+    echo "Hello, World!" > /tmp/mnt/hello.txt
+    cat /tmp/mnt/hello.txt
 
 ## Module Command Mapping (Direct `FS.*` Usage)
 
@@ -115,9 +158,9 @@ and merged `rm` and `rmdir` into one command.
 
 ## Data model
 
-The filesystem is stored as a custom Redis data type. Internally it's a
-flat dictionary mapping absolute paths (like `/etc/nginx/nginx.conf`) to
-inodes. Each inode stores:
+The filesystem is stored in standard Redis HASH and SET keys. Each inode
+is a HASH keyed by its absolute path (like `/etc/nginx/nginx.conf`).
+Each inode stores:
 
 - **Type**: file, directory, or symbolic link
 - **Mode**: POSIX permission bits (e.g., 0755)
@@ -125,16 +168,13 @@ inodes. Each inode stores:
 - **Timestamps**: ctime, mtime, atime in milliseconds since epoch
 - **Payload**: file content (inline bytes), directory children (name array), or symlink target (string)
 
-File content is stored inline in the inode. There's no chunking and no
-separate data key — Redis handles large allocations just fine. A 10 MB
-file is a 10 MB allocation inside the inode. This keeps the
-implementation simple and atomic: an `FS.ECHO` is a single dict
-lookup and a memory copy, not a multi-key transaction.
+File content is stored inline in the inode HASH as the `content` field.
+There's no chunking and no separate data key — Redis handles large
+allocations just fine. A 10 MB file is a 10 MB string inside the HASH.
 
-Directories store an array of child *names* (not full paths). When you
-call `FS.LS`, we return that array directly. When you call `FS.TREE`,
-we walk the tree by joining child names to the current path and looking
-them up in the dict.
+Directories track children via a SET key (`rfs:{fsKey}:children:<path>`)
+containing child *basenames* (not full paths). Listing a directory reads
+the SET, then loads each child's inode HASH.
 
 Paths are always normalized to absolute form. Leading `./` and `../`
 components are resolved. Multiple slashes collapse. Trailing slashes
@@ -753,37 +793,19 @@ multiple keys.
 
 # Volumes and multi-tenancy
 
-A volume is just a key. The first write to a key creates the
-filesystem automatically.
+A volume is a set of keys under the `rfs:{fsKey}:` prefix. The first
+write creates the root directory and info hash automatically.
 
-    > FS.ECHO project-alpha /README.md "Alpha project"
-    OK
-    > FS.ECHO project-beta /README.md "Beta project"
-    OK
-    > FS.ECHO staging /app.conf "port=8080"
-    OK
+To list all keys for a filesystem:
 
-To list all filesystems:
+    > SCAN 0 MATCH "rfs:{myfs}:*"
 
-    > KEYS *
-    1) "project-alpha"
-    2) "project-beta"
-    3) "staging"
+To delete an entire filesystem, delete all its keys:
 
-Or better, use `SCAN` with a `TYPE` filter if you have other data types
-in the same database:
+    > # Use SCAN + DEL in a loop for the pattern rfs:{myfs}:*
 
-    > SCAN 0 TYPE redis-fs0
-
-To delete an entire filesystem, just delete the key:
-
-    > DEL project-alpha
-    (integer) 1
-
-This means standard Redis features — expiration, renaming, access
-control — all work on filesystems. `EXPIRE myfs 3600` gives you a
-filesystem that auto-deletes in an hour. `RENAME staging production`
-does what you'd expect.
+Each filesystem is isolated by its key name. You can run multiple
+filesystems in the same Redis database by choosing different key names.
 
 # Performance characteristics
 
@@ -835,25 +857,22 @@ Or use the Makefile:
 
 **Example:**
 
-    # Start Redis with the module
-    redis-server --loadmodule ./module/fs.so
-
-    # Seed some data
-    redis-cli FS.ECHO myfs /hello.txt "Hello World"
+    # Start any Redis server (no module needed)
+    redis-server
 
     # Mount
     mkdir -p /tmp/mnt
     redis-fs-mount --foreground myfs /tmp/mnt
 
     # Use it like a normal filesystem
+    echo "Hello World" > /tmp/mnt/hello.txt
     cat /tmp/mnt/hello.txt          # → Hello World
-    echo "new file" > /tmp/mnt/new.txt
     ls -la /tmp/mnt/
     mkdir /tmp/mnt/subdir
-    mv /tmp/mnt/new.txt /tmp/mnt/subdir/
+    mv /tmp/mnt/hello.txt /tmp/mnt/subdir/
 
-    # Verify via Redis
-    redis-cli FS.CAT myfs /subdir/new.txt
+    # Verify via Redis — data is in standard HASH/SET keys
+    redis-cli HGETALL "rfs:{myfs}:inode:/subdir/hello.txt"
 
     # Unmount
     fusermount -u /tmp/mnt
@@ -905,24 +924,25 @@ mounts the Redis-backed filesystem at the original source path.
 
 ## How it works
 
-The daemon translates Linux VFS system calls into `FS.*` Redis commands:
+The daemon translates Linux VFS system calls into Redis HASH/SET
+operations via the Go client:
 
-| Operation | Redis command |
-|-----------|---------------|
-| `stat`, `ls` | `FS.STAT`, `FS.LS LONG` |
-| `cat`, `read` | `FS.CAT` |
-| `write`, `echo >` | `FS.ECHO` (buffered, flushed on close/fsync) |
-| `touch`, `creat` | `FS.TOUCH` |
-| `mkdir` | `FS.MKDIR PARENTS` |
-| `rm`, `unlink` | `FS.RM` |
-| `mv`, `rename` | `FS.MV` |
-| `ln -s` | `FS.LN` |
-| `readlink` | `FS.READLINK` |
-| `chmod` | `FS.CHMOD` |
-| `chown` | `FS.CHOWN` |
-| `truncate` | `FS.TRUNCATE` |
-| `utimes` | `FS.UTIMENS` |
-| `df` | `FS.INFO` |
+| Operation | Redis operations |
+|-----------|-----------------|
+| `stat`, `ls` | `HGETALL` inode HASH, `SMEMBERS` children SET |
+| `cat`, `read` | `HGETALL` inode HASH (content field) |
+| `write`, `echo >` | `HSET` inode HASH (buffered, flushed on close/fsync) |
+| `touch`, `creat` | `HSET` inode HASH |
+| `mkdir` | `HSET` inode + `SADD` children |
+| `rm`, `unlink` | `DEL` inode + `SREM` from parent children |
+| `mv`, `rename` | `SCAN` + `HSET`/`DEL` (rebind subtree keys) |
+| `ln -s` | `HSET` inode with target field |
+| `readlink` | `HGETALL` inode HASH (target field) |
+| `chmod` | `HSET` mode field |
+| `chown` | `HSET` uid/gid fields |
+| `truncate` | `HSET` content + size fields |
+| `utimes` | `HSET` timestamp fields |
+| `df` | `HGETALL` info HASH |
 
 Writes are buffered in memory per file handle and flushed to Redis on
 `close()` or `fsync()`. Attribute and directory listing results are
@@ -1039,4 +1059,4 @@ The skill teaches agents:
 
 ## License
 
-BSD-2-Clause
+AGPLv3

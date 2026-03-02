@@ -503,17 +503,6 @@ func startServices(cfg config) error {
 	}
 	s.succeed(cfg.RedisAddr)
 
-	s = startStep("Selecting backend")
-	moduleLoaded, err := isFSModuleLoaded(ctx, rdb)
-	if err != nil {
-		s.fail("probe failed")
-		return err
-	}
-	if moduleLoaded {
-		s.succeed("fs module")
-	} else {
-		s.succeed("compatibility mode")
-	}
 	fsClient := client.New(rdb, cfg.RedisKey)
 
 	s = startStep("Mounting filesystem")
@@ -632,17 +621,6 @@ func performMigration(cfg config, sourceDir string, r *bufio.Reader) error {
 	}
 	step.succeed(cfg.RedisAddr)
 
-	step = startStep("Selecting backend")
-	moduleLoaded, err := isFSModuleLoaded(ctx, rdb)
-	if err != nil {
-		step.fail("probe failed")
-		return err
-	}
-	if moduleLoaded {
-		step.succeed("fs module")
-	} else {
-		step.succeed("compatibility mode")
-	}
 	fsClient := client.New(rdb, cfg.RedisKey)
 
 	exists := int64(0)
@@ -653,15 +631,6 @@ func performMigration(cfg config, sourceDir string, r *bufio.Reader) error {
 	if rootStat != nil {
 		exists = 1
 	}
-	if moduleLoaded {
-		keyExists, err := rdb.Exists(ctx, cfg.RedisKey).Result()
-		if err != nil {
-			return err
-		}
-		if keyExists > 0 {
-			exists = 1
-		}
-	}
 	if exists > 0 {
 		ok, err := promptYesNo(r, os.Stdout,
 			fmt.Sprintf("  Redis key %q already exists. Overwrite?", cfg.RedisKey), false)
@@ -671,14 +640,8 @@ func performMigration(cfg config, sourceDir string, r *bufio.Reader) error {
 		if !ok {
 			return errors.New("migration cancelled")
 		}
-		if moduleLoaded {
-			if err := rdb.Del(ctx, cfg.RedisKey).Err(); err != nil {
-				return fmt.Errorf("delete existing redis key: %w", err)
-			}
-		} else {
-			if err := deleteCompatNamespace(ctx, rdb, cfg.RedisKey); err != nil {
-				return fmt.Errorf("delete compatibility namespace: %w", err)
-			}
+		if err := deleteNamespace(ctx, rdb, cfg.RedisKey); err != nil {
+			return fmt.Errorf("delete namespace: %w", err)
 		}
 	}
 
@@ -860,7 +823,6 @@ func startRedisDaemon(cfg config) (int, error) {
 	pidfile := fmt.Sprintf("/tmp/rfs-%d.pid", cfg.redisPort)
 	args := []string{
 		"--port", strconv.Itoa(cfg.redisPort),
-		"--loadmodule", cfg.ModulePath,
 		"--save", "",
 		"--appendonly", "no",
 		"--daemonize", "yes",
@@ -934,16 +896,8 @@ func startMountDaemon(cfg config) (int, error) {
 	return pid, nil
 }
 
-func isFSModuleLoaded(ctx context.Context, rdb *redis.Client) (bool, error) {
-	res, err := rdb.Do(ctx, "COMMAND", "LIST", "FILTERBY", "MODULE", "fs").Slice()
-	if err != nil {
-		return false, fmt.Errorf("module capability check failed: %w", err)
-	}
-	return len(res) > 0, nil
-}
-
-func deleteCompatNamespace(ctx context.Context, rdb *redis.Client, fsKey string) error {
-	pattern := "rfs:compat:" + fsKey + ":*"
+func deleteNamespace(ctx context.Context, rdb *redis.Client, fsKey string) error {
+	pattern := "rfs:{" + fsKey + "}:*"
 	var cursor uint64
 	for {
 		keys, next, err := rdb.Scan(ctx, cursor, pattern, 500).Result()
@@ -1090,12 +1044,6 @@ func resolveConfigPaths(cfg *config) error {
 				return fmt.Errorf("cannot find redis-server binary\n  Install Redis or set useExistingRedis to true in config")
 			}
 			cfg.RedisServerBin = resolved
-		}
-		if cfg.ModulePath == "" {
-			cfg.ModulePath = filepath.Join(dir, "module", "fs.so")
-		}
-		if _, err := os.Stat(cfg.ModulePath); err != nil {
-			return fmt.Errorf("cannot find fs.so module at %s\n  Build it with: make module", cfg.ModulePath)
 		}
 	}
 
