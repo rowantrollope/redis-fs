@@ -35,7 +35,7 @@ type FSRoot struct {
 type FSNode struct {
 	fs.Inode
 
-	client    *client.Client
+	client    client.Client
 	attrCache *cache.Cache
 	dirCache  *cache.Cache
 	opts      *Options
@@ -78,7 +78,7 @@ func (n *FSNode) newChild(name string) *FSNode {
 }
 
 // Mount mounts the Redis FS at the given mountpoint.
-func Mount(mountpoint string, c *client.Client, opts *Options) (*fuse.Server, error) {
+func Mount(mountpoint string, c client.Client, opts *Options) (*fuse.Server, error) {
 	if opts.AttrTimeout == 0 {
 		opts.AttrTimeout = time.Second
 	}

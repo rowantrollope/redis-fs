@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis-fs/mount/client"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -323,7 +324,9 @@ func cmdDown() error {
 	st, err := loadState()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Println("\n  Redis-FS is not running. Nothing to stop.\n")
+			fmt.Println()
+			fmt.Println("  Redis-FS is not running. Nothing to stop.")
+			fmt.Println()
 			return nil
 		}
 		return err
@@ -500,19 +503,25 @@ func startServices(cfg config) error {
 	}
 	s.succeed(cfg.RedisAddr)
 
-	s = startStep("Checking FS module")
-	if err := ensureFSModuleLoaded(ctx, rdb); err != nil {
-		s.fail("module not loaded")
+	s = startStep("Selecting backend")
+	moduleLoaded, err := isFSModuleLoaded(ctx, rdb)
+	if err != nil {
+		s.fail("probe failed")
 		return err
 	}
-	s.succeed("ready")
+	if moduleLoaded {
+		s.succeed("fs module")
+	} else {
+		s.succeed("compatibility mode")
+	}
+	fsClient := client.New(rdb, cfg.RedisKey)
 
 	s = startStep("Mounting filesystem")
 	if err := os.MkdirAll(cfg.Mountpoint, 0o755); err != nil {
 		s.fail(err.Error())
 		return fmt.Errorf("create mountpoint: %w", err)
 	}
-	if err := rdb.Do(ctx, "FS.TOUCH", cfg.RedisKey, "/.mount-check").Err(); err != nil {
+	if err := fsClient.Touch(ctx, "/.mount-check"); err != nil {
 		s.fail(err.Error())
 		return fmt.Errorf("failed to initialize key %q: %w", cfg.RedisKey, err)
 	}
@@ -623,16 +632,35 @@ func performMigration(cfg config, sourceDir string, r *bufio.Reader) error {
 	}
 	step.succeed(cfg.RedisAddr)
 
-	step = startStep("Checking FS module")
-	if err := ensureFSModuleLoaded(ctx, rdb); err != nil {
-		step.fail("not loaded")
+	step = startStep("Selecting backend")
+	moduleLoaded, err := isFSModuleLoaded(ctx, rdb)
+	if err != nil {
+		step.fail("probe failed")
 		return err
 	}
-	step.succeed("ready")
+	if moduleLoaded {
+		step.succeed("fs module")
+	} else {
+		step.succeed("compatibility mode")
+	}
+	fsClient := client.New(rdb, cfg.RedisKey)
 
-	exists, err := rdb.Exists(ctx, cfg.RedisKey).Result()
+	exists := int64(0)
+	rootStat, err := fsClient.Stat(ctx, "/")
 	if err != nil {
 		return err
+	}
+	if rootStat != nil {
+		exists = 1
+	}
+	if moduleLoaded {
+		keyExists, err := rdb.Exists(ctx, cfg.RedisKey).Result()
+		if err != nil {
+			return err
+		}
+		if keyExists > 0 {
+			exists = 1
+		}
 	}
 	if exists > 0 {
 		ok, err := promptYesNo(r, os.Stdout,
@@ -643,13 +671,19 @@ func performMigration(cfg config, sourceDir string, r *bufio.Reader) error {
 		if !ok {
 			return errors.New("migration cancelled")
 		}
-		if err := rdb.Del(ctx, cfg.RedisKey).Err(); err != nil {
-			return fmt.Errorf("delete existing redis key: %w", err)
+		if moduleLoaded {
+			if err := rdb.Del(ctx, cfg.RedisKey).Err(); err != nil {
+				return fmt.Errorf("delete existing redis key: %w", err)
+			}
+		} else {
+			if err := deleteCompatNamespace(ctx, rdb, cfg.RedisKey); err != nil {
+				return fmt.Errorf("delete compatibility namespace: %w", err)
+			}
 		}
 	}
 
 	step = startStep("Importing files")
-	files, dirs, links, err := importDirectory(ctx, rdb, cfg.RedisKey, sourceDir, func(f, d, l int) {
+	files, dirs, links, err := importDirectory(ctx, fsClient, sourceDir, func(f, d, l int) {
 		label := fmt.Sprintf("Importing · %d files, %d dirs", f, d)
 		if l > 0 {
 			label += fmt.Sprintf(", %d symlinks", l)
@@ -741,7 +775,7 @@ func performMigration(cfg config, sourceDir string, r *bufio.Reader) error {
 // Directory import
 // ---------------------------------------------------------------------------
 
-func importDirectory(ctx context.Context, rdb *redis.Client, key, source string, onProgress func(files, dirs, symlinks int)) (int, int, int, error) {
+func importDirectory(ctx context.Context, fsClient client.Client, source string, onProgress func(files, dirs, symlinks int)) (int, int, int, error) {
 	var files, dirs, symlinks int
 	err := filepath.WalkDir(source, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -768,13 +802,13 @@ func importDirectory(ctx context.Context, rdb *redis.Client, key, source string,
 			if err != nil {
 				return err
 			}
-			if err := rdb.Do(ctx, "FS.LN", key, target, redisPath).Err(); err != nil {
-				return fmt.Errorf("FS.LN %s: %w", redisPath, err)
+			if err := fsClient.Ln(ctx, target, redisPath); err != nil {
+				return fmt.Errorf("ln %s: %w", redisPath, err)
 			}
 			symlinks++
 		case d.IsDir():
-			if err := rdb.Do(ctx, "FS.MKDIR", key, redisPath, "PARENTS").Err(); err != nil {
-				return fmt.Errorf("FS.MKDIR %s: %w", redisPath, err)
+			if err := fsClient.Mkdir(ctx, redisPath); err != nil {
+				return fmt.Errorf("mkdir %s: %w", redisPath, err)
 			}
 			dirs++
 		default:
@@ -782,13 +816,13 @@ func importDirectory(ctx context.Context, rdb *redis.Client, key, source string,
 			if err != nil {
 				return err
 			}
-			if err := rdb.Do(ctx, "FS.ECHO", key, redisPath, data).Err(); err != nil {
-				return fmt.Errorf("FS.ECHO %s: %w", redisPath, err)
+			if err := fsClient.Echo(ctx, redisPath, data); err != nil {
+				return fmt.Errorf("echo %s: %w", redisPath, err)
 			}
 			files++
 		}
 
-		if err := applyMetadata(ctx, rdb, key, redisPath, info); err != nil {
+		if err := applyMetadata(ctx, fsClient, redisPath, info); err != nil {
 			return err
 		}
 		if onProgress != nil {
@@ -799,21 +833,20 @@ func importDirectory(ctx context.Context, rdb *redis.Client, key, source string,
 	return files, dirs, symlinks, err
 }
 
-func applyMetadata(ctx context.Context, rdb *redis.Client, key, path string, info os.FileInfo) error {
-	modeStr := fmt.Sprintf("%04o", info.Mode().Perm())
-	if err := rdb.Do(ctx, "FS.CHMOD", key, path, modeStr).Err(); err != nil {
-		return fmt.Errorf("FS.CHMOD %s: %w", path, err)
+func applyMetadata(ctx context.Context, fsClient client.Client, path string, info os.FileInfo) error {
+	if err := fsClient.Chmod(ctx, path, uint32(info.Mode().Perm())); err != nil {
+		return fmt.Errorf("chmod %s: %w", path, err)
 	}
 	if st, ok := info.Sys().(*syscall.Stat_t); ok {
-		if err := rdb.Do(ctx, "FS.CHOWN", key, path, st.Uid, st.Gid).Err(); err != nil {
-			return fmt.Errorf("FS.CHOWN %s: %w", path, err)
+		if err := fsClient.Chown(ctx, path, st.Uid, st.Gid); err != nil {
+			return fmt.Errorf("chown %s: %w", path, err)
 		}
 		aSec, aNsec := statAtime(st)
 		mSec, mNsec := statMtime(st)
 		atimeMs := aSec*1000 + aNsec/1_000_000
 		mtimeMs := mSec*1000 + mNsec/1_000_000
-		if err := rdb.Do(ctx, "FS.UTIMENS", key, path, atimeMs, mtimeMs).Err(); err != nil {
-			return fmt.Errorf("FS.UTIMENS %s: %w", path, err)
+		if err := fsClient.Utimens(ctx, path, atimeMs, mtimeMs); err != nil {
+			return fmt.Errorf("utimens %s: %w", path, err)
 		}
 	}
 	return nil
@@ -901,15 +934,33 @@ func startMountDaemon(cfg config) (int, error) {
 	return pid, nil
 }
 
-func ensureFSModuleLoaded(ctx context.Context, rdb *redis.Client) error {
+func isFSModuleLoaded(ctx context.Context, rdb *redis.Client) (bool, error) {
 	res, err := rdb.Do(ctx, "COMMAND", "LIST", "FILTERBY", "MODULE", "fs").Slice()
 	if err != nil {
-		return fmt.Errorf("module capability check failed: %w", err)
+		return false, fmt.Errorf("module capability check failed: %w", err)
 	}
-	if len(res) > 0 {
-		return nil
+	return len(res) > 0, nil
+}
+
+func deleteCompatNamespace(ctx context.Context, rdb *redis.Client, fsKey string) error {
+	pattern := "rfs:compat:" + fsKey + ":*"
+	var cursor uint64
+	for {
+		keys, next, err := rdb.Scan(ctx, cursor, pattern, 500).Result()
+		if err != nil {
+			return err
+		}
+		if len(keys) > 0 {
+			if err := rdb.Del(ctx, keys...).Err(); err != nil {
+				return err
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
 	}
-	return errors.New("Redis FS module is not loaded.\nLoad it with: redis-cli MODULE LOAD /path/to/module/fs.so")
+	return nil
 }
 
 func waitForMount(mountpoint string, timeout time.Duration) error {

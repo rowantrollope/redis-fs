@@ -89,7 +89,9 @@ func runeWidth(s string) int {
 
 func printBanner() {
 	if !colorTerm {
-		fmt.Println("\n  REDIS-FS\n")
+		fmt.Println()
+		fmt.Println("  REDIS-FS")
+		fmt.Println()
 		return
 	}
 
@@ -120,7 +122,9 @@ func printBanner() {
 
 func printBannerCompact() {
 	if !colorTerm {
-		fmt.Fprintln(os.Stderr, "\n  REDIS-FS\n")
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "  REDIS-FS")
+		fmt.Fprintln(os.Stderr)
 		return
 	}
 	bar := ansiGray + "░░░░" +

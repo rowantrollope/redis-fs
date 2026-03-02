@@ -12,7 +12,7 @@ import (
 // FileHandle manages buffered I/O for an open file.
 type FileHandle struct {
 	path   string
-	client *client.Client
+	client client.Client
 	node   *FSNode
 
 	mu      sync.Mutex
@@ -21,7 +21,7 @@ type FileHandle struct {
 	dirty   bool   // whether buffer has been modified
 }
 
-func newFileHandle(path string, c *client.Client, node *FSNode) *FileHandle {
+func newFileHandle(path string, c client.Client, node *FSNode) *FileHandle {
 	return &FileHandle{
 		path:   path,
 		client: c,
