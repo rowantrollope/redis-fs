@@ -68,7 +68,7 @@ class RdbPersistence(TestCase):
         ls = r.execute_command("FS.LS", k, "/mydir")
         assert b"a.txt" in ls
 
-        # Verify bloom filters rebuilt — grep should still work.
+        # Verify grep still works after reload.
         results = r.execute_command("FS.GREP", k, "/", "*hello*")
         paths = [m[0] for m in results]
         assert b"/f.txt" in paths

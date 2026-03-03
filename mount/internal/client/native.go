@@ -233,17 +233,10 @@ func (c *nativeClient) Mv(ctx context.Context, src, dst string) error {
 		return err
 	}
 
-	paths, err := c.listAllInodePaths(ctx)
+	moved, err := c.collectSubtreePaths(ctx, resolvedSrc)
 	if err != nil {
 		return err
 	}
-	moved := make([]string, 0)
-	for _, p := range paths {
-		if p == resolvedSrc || strings.HasPrefix(p, resolvedSrc+"/") {
-			moved = append(moved, p)
-		}
-	}
-	sort.Slice(moved, func(i, j int) bool { return len(moved[i]) < len(moved[j]) })
 
 	for _, oldPath := range moved {
 		newPath := dst + strings.TrimPrefix(oldPath, resolvedSrc)
@@ -1292,27 +1285,38 @@ func (c *nativeClient) adjustTotalData(ctx context.Context, delta int64) error {
 	return c.rdb.HIncrBy(ctx, c.keys.info(), "total_data_bytes", delta).Err()
 }
 
-func (c *nativeClient) listAllInodePaths(ctx context.Context) ([]string, error) {
-	var (
-		cursor uint64
-		paths  []string
-	)
-	prefix := c.keys.inodePrefix()
-	for {
-		keys, next, err := c.rdb.Scan(ctx, cursor, prefix+"*", 200).Result()
+func (c *nativeClient) collectSubtreePaths(ctx context.Context, root string) ([]string, error) {
+	queue := []string{root}
+	out := make([]string, 0, 16)
+
+	for len(queue) > 0 {
+		current := queue[0]
+		queue = queue[1:]
+
+		inode, err := c.loadInode(ctx, current)
 		if err != nil {
 			return nil, err
 		}
-		for _, key := range keys {
-			p := strings.TrimPrefix(key, prefix)
-			paths = append(paths, p)
+		if inode == nil {
+			continue
 		}
-		cursor = next
-		if cursor == 0 {
-			break
+		out = append(out, current)
+		if inode.Type != "dir" {
+			continue
+		}
+
+		children, err := c.rdb.SMembers(ctx, c.keys.children(current)).Result()
+		if err != nil {
+			return nil, err
+		}
+		sort.Strings(children)
+		for _, child := range children {
+			queue = append(queue, joinPath(current, child))
 		}
 	}
-	return paths, nil
+
+	sort.Slice(out, func(i, j int) bool { return len(out[i]) < len(out[j]) })
+	return out, nil
 }
 
 func (i *inodeData) toStat() *StatResult {

@@ -30,16 +30,6 @@
  * HSET creates a hash on first field. Read-only commands against a missing
  * key return an error rather than auto-creating.
  *
- * ========================== Bloom filter ==================================
- *
- * Each file inode carries a 256-byte trigram bloom filter built from the
- * lowercased content. FS.GREP checks this bloom before scanning file
- * content line by line. We use trigrams (3-byte sequences) rather than
- * bigrams because they have far lower collision rates in typical text,
- * giving a useful false-positive rate even at 256 bytes per file.
- * The bloom is a derived cache — it is rebuilt on write and on RDB load,
- * never persisted.
- *
  * ========================== Symlink resolution ============================
  *
  * Symlinks are resolved lazily at read time. The target string is stored
@@ -263,7 +253,6 @@ void fsFileSetData(fsInode *inode, const char *data, size_t len) {
         inode->payload.file.data = NULL;
     }
     inode->payload.file.size = len;
-    fsBloomBuild(inode);
 }
 
 void fsFileAppendData(fsInode *inode, const char *data, size_t len) {
@@ -273,68 +262,14 @@ void fsFileAppendData(fsInode *inode, const char *data, size_t len) {
     inode->payload.file.data = RedisModule_Realloc(inode->payload.file.data, newsize);
     memcpy(inode->payload.file.data + oldsize, data, len);
     inode->payload.file.size = newsize;
-    fsBloomBuild(inode);
 }
 
 /* ===================================================================
- * Bloom filter — trigram-based content index for accelerating FS.GREP.
- *
- * Each file inode carries a 256-byte (2048-bit) bloom filter populated
- * with trigrams extracted from the lowercased file content. Two hash
- * functions per trigram (FNV-1a variants with different seeds) give a
- * low false-positive rate for typical file sizes.
- *
- * On write: rebuild the bloom from content.
- * On grep:  extract trigrams from the pattern's literal portion, check
- *           the bloom. If any trigram is definitely absent, skip the file.
- * On load:  rebuild blooms from content (not persisted — derived cache).
+ * Grep helpers
  * =================================================================== */
-
-static inline uint32_t fsBloomHash1(uint8_t a, uint8_t b, uint8_t c) {
-    uint32_t h = 2166136261u; // FNV-1a offset basis
-    h ^= a; h *= 16777619u;
-    h ^= b; h *= 16777619u;
-    h ^= c; h *= 16777619u;
-    return h;
-}
-
-static inline uint32_t fsBloomHash2(uint8_t a, uint8_t b, uint8_t c) {
-    uint32_t h = 84696351u; // Different seed
-    h ^= a; h *= 16777619u;
-    h ^= b; h *= 16777619u;
-    h ^= c; h *= 16777619u;
-    return h;
-}
-
-static inline void fsBloomSet(uint8_t *bloom, uint32_t hash) {
-    unsigned int bit = hash % FS_BLOOM_BITS;
-    bloom[bit / 8] |= (1u << (bit % 8));
-}
-
-static inline int fsBloomTest(const uint8_t *bloom, uint32_t hash) {
-    unsigned int bit = hash % FS_BLOOM_BITS;
-    return (bloom[bit / 8] >> (bit % 8)) & 1;
-}
 
 static inline uint8_t fsLowerChar(uint8_t c) {
     return (c >= 'A' && c <= 'Z') ? c + 32 : c;
-}
-
-/* Build the bloom filter from file content (lowercased trigrams). */
-void fsBloomBuild(fsInode *inode) {
-    memset(inode->payload.file.bloom, 0, FS_BLOOM_BYTES);
-    if (!inode->payload.file.data || inode->payload.file.size < 3) return;
-
-    const uint8_t *data = (const uint8_t *)inode->payload.file.data;
-    size_t size = inode->payload.file.size;
-
-    for (size_t i = 0; i + 2 < size; i++) {
-        uint8_t a = fsLowerChar(data[i]);
-        uint8_t b = fsLowerChar(data[i+1]);
-        uint8_t c = fsLowerChar(data[i+2]);
-        fsBloomSet(inode->payload.file.bloom, fsBloomHash1(a, b, c));
-        fsBloomSet(inode->payload.file.bloom, fsBloomHash2(a, b, c));
-    }
 }
 
 /* Extract the longest literal substring from a glob pattern.
@@ -342,7 +277,7 @@ void fsBloomBuild(fsInode *inode) {
  * backslash-escaped characters as their literal value.
  * Returns the literal in a static buffer via *out, and its length.
  * Returns 0 if no useful literal (>= 3 chars) can be extracted. */
-static size_t fsBloomExtractLiteral(const char *pattern, const char **out) {
+static size_t fsExtractLiteral(const char *pattern, const char **out) {
     static char buf[256];
     char cur[256];
     size_t curlen = 0;
@@ -400,34 +335,6 @@ static size_t fsBloomExtractLiteral(const char *pattern, const char **out) {
     buf[bestlen] = '\0';
     *out = buf;
     return bestlen;
-}
-
-/* Check if a pattern's literal trigrams might be present in a file's bloom.
- * Returns 1 = maybe present, 0 = definitely absent. Always case-insensitive
- * since grep NOCASE is common and a false-positive is cheap (just scan). */
-int fsBloomMayMatch(const fsInode *inode, const char *pattern) {
-    if (inode->payload.file.size < 3) {
-        // Files under 3 bytes can't produce any trigrams, so the bloom is
-        // empty. Returning 1 forces the caller to do a full scan — which
-        // is fine since the file is tiny anyway.
-        return 1;
-    }
-
-    const char *litstr;
-    size_t litlen = fsBloomExtractLiteral(pattern, &litstr);
-    if (litlen < 3) return 1; // No useful literal — must scan.
-
-    const uint8_t *lit = (const uint8_t *)litstr;
-    for (size_t i = 0; i + 2 < litlen; i++) {
-        uint8_t a = fsLowerChar(lit[i]);
-        uint8_t b = fsLowerChar(lit[i+1]);
-        uint8_t c = fsLowerChar(lit[i+2]);
-        if (!fsBloomTest(inode->payload.file.bloom, fsBloomHash1(a, b, c)))
-            return 0; // Definitely not present.
-        if (!fsBloomTest(inode->payload.file.bloom, fsBloomHash2(a, b, c)))
-            return 0;
-    }
-    return 1; // All trigrams present — maybe a match.
 }
 
 /* ===================================================================
@@ -736,7 +643,6 @@ void *FSRdbLoad(RedisModuleIO *rdb, int encver) {
             }
             fs->file_count++;
             fs->total_data_size += inode->payload.file.size;
-            fsBloomBuild(inode); // Rebuild bloom from content.
             break;
         }
         case FS_INODE_DIR: {
@@ -2922,11 +2828,6 @@ static void fsGrepWalk(fsObject *fs, const char *path, size_t pathlen,
     if (!inode) return;
 
     if (inode->type == FS_INODE_FILE && inode->payload.file.size > 0) {
-        /* Bloom filter fast path: skip files that definitely don't match.
-         * The bloom is always built with lowercased trigrams, so it works
-         * for both case-sensitive and case-insensitive grep. */
-        if (!fsBloomMayMatch(inode, pattern)) goto recurse;
-
         const char *data = inode->payload.file.data;
         size_t size = inode->payload.file.size;
 
@@ -2940,7 +2841,7 @@ static void fsGrepWalk(fsObject *fs, const char *path, size_t pathlen,
              * We can't do line-by-line glob on binary, so just check if
              * the literal is present anywhere (case-insensitive). */
             const char *lit;
-            size_t litlen = fsBloomExtractLiteral(pattern, &lit);
+            size_t litlen = fsExtractLiteral(pattern, &lit);
             int found = 0;
             if (litlen >= 1) {
                 for (size_t i = 0; i + litlen <= size && !found; i++) {
@@ -2999,7 +2900,6 @@ static void fsGrepWalk(fsObject *fs, const char *path, size_t pathlen,
         }
     }
 
-recurse:
     if (inode->type == FS_INODE_DIR) {
         for (size_t i = 0; i < inode->payload.dir.count; i++) {
             char *childpath = fsJoinPath(path, pathlen,
@@ -3102,20 +3002,17 @@ static int TRUNCATE_RedisCommand(RedisModuleCtx *ctx, RedisModuleString **argv, 
         if (inode->payload.file.data) RedisModule_Free(inode->payload.file.data);
         inode->payload.file.data = NULL;
         inode->payload.file.size = 0;
-        memset(inode->payload.file.bloom, 0, FS_BLOOM_BYTES);
     } else if (newlen < oldlen) {
         // Shrink.
         fs->total_data_size -= (oldlen - newlen);
         inode->payload.file.data = RedisModule_Realloc(inode->payload.file.data, newlen);
         inode->payload.file.size = newlen;
-        fsBloomBuild(inode);
     } else if (newlen > oldlen) {
         // Zero-extend.
         fs->total_data_size += (newlen - oldlen);
         inode->payload.file.data = RedisModule_Realloc(inode->payload.file.data, newlen);
         memset(inode->payload.file.data + oldlen, 0, newlen - oldlen);
         inode->payload.file.size = newlen;
-        fsBloomBuild(inode);
     }
     // newlen == oldlen: no-op.
 

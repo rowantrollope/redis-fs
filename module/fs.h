@@ -35,12 +35,6 @@
 #define FS_MAX_SYMLINK_DEPTH 40
 #define FS_MAX_TREE_DEPTH  64
 
-/* Bloom filter for accelerating FS.GREP.
- * Each file inode carries a small bloom filter of content trigrams.
- * 256 bytes = 2048 bits, two hash functions per trigram. */
-#define FS_BLOOM_BYTES 256
-#define FS_BLOOM_BITS  (FS_BLOOM_BYTES * 8)
-
 /* A single inode in the filesystem. */
 typedef struct fsInode {
     uint8_t type;           /* FS_INODE_FILE, FS_INODE_DIR, FS_INODE_SYMLINK */
@@ -54,7 +48,6 @@ typedef struct fsInode {
         struct {
             char *data;     /* File content (binary-safe) */
             size_t size;    /* Content length */
-            uint8_t bloom[FS_BLOOM_BYTES]; /* Trigram bloom filter */
         } file;
         struct {
             char **children;    /* Array of child basenames (not full paths) */
@@ -111,15 +104,6 @@ void fsFileSetData(fsInode *inode, const char *data, size_t len);
 
 /* Append data to a file inode. */
 void fsFileAppendData(fsInode *inode, const char *data, size_t len);
-
-/* ---- Bloom filter helpers ---- */
-
-/* Rebuild a file inode's bloom filter from its content. */
-void fsBloomBuild(fsInode *inode);
-
-/* Check if a glob pattern's literal substring might match this file's content.
- * Returns 1 if the bloom filter says "maybe", 0 if "definitely not". */
-int fsBloomMayMatch(const fsInode *inode, const char *pattern);
 
 /* ---- Lookup helpers ---- */
 

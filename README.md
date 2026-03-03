@@ -120,6 +120,31 @@ If you want full manual control:
     echo "Hello, World!" > /tmp/mnt/hello.txt
     cat /tmp/mnt/hello.txt
 
+## BM25 Search (`redis-qmd`)
+
+`grep -R` over a mounted filesystem remains standard lexical grep. For
+ranked full-text search, use `redis-qmd`, which indexes inode HASH keys
+with RediSearch and uses BM25 ranking.
+
+Build:
+
+    make cli
+
+Create/rebuild index:
+
+    ./redis-qmd --key myfs index create
+    ./redis-qmd --key myfs index rebuild
+
+Search:
+
+    ./redis-qmd --key myfs search "disk full"
+    ./redis-qmd --key myfs query "\"disk full\" AND retry path:/logs/ size>100"
+    ./redis-qmd --key myfs grep "disk full"
+
+Benchmark (BM25 vs naive scan vs mounted GNU grep):
+
+    python tests/bench_search.py --key myfs --query "disk full" --mount /tmp/mnt
+
 ## Module Command Mapping (Direct `FS.*` Usage)
 
 If you've used a terminal, you already know how to use this module.
@@ -155,7 +180,7 @@ and merged `rm` and `rmdir` into one command.
 | tree -L 2 dir                  | FS.TREE key /dir DEPTH 2           | Limits recursion depth                     |
 | find dir -name "*.txt"         | FS.FIND key /dir "*.txt"           | Full glob: *, ?, [a-z], [!x], \            |
 | find dir -name "*.txt" -type f | FS.FIND key /dir "*.txt" TYPE file | Filter by type                             |
-| grep -r "pattern" dir          | FS.GREP key /dir "*pattern*"       | Glob match on each line, bloom-accelerated |
+| grep -r "pattern" dir          | FS.GREP key /dir "*pattern*"       | Glob match on each line |
 | grep -ri "pattern" dir         | FS.GREP key /dir "*pattern*" NOCASE| Case-insensitive                           |
 | truncate -s 100 file           | FS.TRUNCATE key /file 100          | Shrink, extend, or zero a file             |
 | touch -t file                  | FS.UTIMENS key /file atime mtime   | Set times in ms; -1 = don't change         |
@@ -668,16 +693,8 @@ number 0 and the text "Binary file matches":
        2) (integer) 0
        3) "Binary file matches"
 
-Each file carries a 256-byte trigram bloom filter built from its
-lowercased content. Before scanning a file, `FS.GREP` checks the
-bloom filter against the pattern's longest literal substring. Files
-that definitely don't contain the literal are skipped entirely,
-which can significantly reduce scan time when searching large
-filesystems with selective patterns.
-
 The command is O(n * m) where n is the number of files under the path
-and m is the average file size. The bloom filter prunes files that
-definitely don't match, but worst-case every file must be scanned.
+and m is the average file size; worst-case every file must be scanned.
 For large filesystems, keep your search scope narrow by specifying
 a deeper path.
 
@@ -1058,7 +1075,7 @@ The skill teaches agents:
 - **Access control**: Mode bits and uid/gid are stored but not enforced. They're metadata for your application to check, not a security boundary. Use Redis ACLs for access control.
 - **File locking**: No `flock`, no advisory locks. Coordinate in your application or use Redis WATCH/MULTI if you need CAS semantics.
 - **Extended attributes**: Phase 2. Coming as `FS.XATTR.SET/GET/DEL/LIST`.
-- **Full-text search**: Use RediSearch with a custom indexer. The module stores the data, but doesn't maintain search indexes.
+- **Full-text search**: Use `redis-qmd` (BM25 on RediSearch) for ranked search over inode HASH keys.
 - **Vector embeddings**: Same — use Vector Sets alongside this module if you need semantic search over file contents.
 - **Streaming / range reads**: `FS.CAT` returns the whole file. There's no `FS.CAT key /file OFFSET 1024 COUNT 4096` yet. If you need that, it's a reasonable Phase 2 addition.
 

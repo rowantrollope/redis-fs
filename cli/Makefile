@@ -1,9 +1,12 @@
-all: rfs
+all: rfs redis-qmd
 
 rfs:
 	go build -o ../rfs .
 
-clean:
-	rm -f ../rfs
+redis-qmd:
+	go build -o ../redis-qmd ./cmd/redis-qmd
 
-.PHONY: all clean rfs
+clean:
+	rm -f ../rfs ../redis-qmd
+
+.PHONY: all clean rfs redis-qmd

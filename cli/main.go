@@ -340,9 +340,40 @@ func cmdUp() error {
 	if err := resolveConfigPaths(&cfg); err != nil {
 		return err
 	}
+	if err := cleanupStaleMount(cfg); err != nil {
+		return err
+	}
 
 	printBanner()
 	return startServices(cfg)
+}
+
+func cleanupStaleMount(cfg config) error {
+	entry, mounted := mountTableEntry(cfg.Mountpoint)
+	if !mounted {
+		return nil
+	}
+	if !isRedisFSMountEntry(entry) {
+		return fmt.Errorf("mountpoint %s is already mounted by another filesystem\n  mount entry: %s", cfg.Mountpoint, entry)
+	}
+
+	backend, _, err := backendForConfig(cfg)
+	if err != nil {
+		return err
+	}
+
+	s := startStep("Cleaning stale mount")
+	if err := backend.Unmount(cfg.Mountpoint); err != nil {
+		s.fail(err.Error())
+		return fmt.Errorf("stale redis-fs mount at %s could not be unmounted: %w", cfg.Mountpoint, err)
+	}
+	s.succeed(cfg.Mountpoint)
+	return nil
+}
+
+func isRedisFSMountEntry(entry string) bool {
+	v := strings.ToLower(entry)
+	return strings.Contains(v, "fuse.redis-fs") || strings.Contains(v, "redis-fs on ") || strings.Contains(v, " redis-fs ")
 }
 
 // ---------------------------------------------------------------------------

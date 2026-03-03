@@ -157,7 +157,7 @@ Replace `vol` below with your chosen key name.
 | `mv src dst` | `FS.MV vol /src /dst` | Moves entire subtrees atomically |
 | `find dir -name "*.txt"` | `FS.FIND vol /dir "*.txt"` | Glob: `*`, `?`, `[a-z]`, `[!x]`, `\` |
 | `find dir -name "*.txt" -type f` | `FS.FIND vol /dir "*.txt" TYPE file` | Filter: file, dir, symlink |
-| `grep -r "pattern" dir` | `FS.GREP vol /dir "*pattern*"` | Glob on each line, bloom-accelerated |
+| `grep -r "pattern" dir` | `FS.GREP vol /dir "*pattern*"` | Glob on each line |
 | `grep -ri "pattern" dir` | `FS.GREP vol /dir "*pattern*" NOCASE` | Case-insensitive |
 | `stat file` | `FS.STAT vol /file` | type, mode, uid, gid, size, times |
 | `test -e file` | `FS.TEST vol /file` | Returns 1 or 0 |
@@ -199,6 +199,14 @@ redis-cli FS.FIND vol /src "*.go" TYPE file
 ```bash
 redis-cli FS.GREP vol / "*TODO*"
 redis-cli FS.GREP vol /src "*error*" NOCASE
+```
+
+**BM25-ranked search (RedisSearch via redis-qmd):**
+```bash
+redis-qmd --key vol index create
+redis-qmd --key vol search "TODO auth"
+redis-qmd --key vol query "\"disk full\" AND retry path:/logs/"
+redis-qmd --key vol grep "TODO"
 ```
 
 **Copy, move, delete:**

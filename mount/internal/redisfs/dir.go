@@ -169,7 +169,15 @@ func (n *FSNode) Rename(ctx context.Context, name string, newParent fs.InodeEmbe
 	}
 
 	oldPath := n.newChild(name).fsPath
-	newParentNode := newParent.(*FSNode)
+	var newParentNode *FSNode
+	switch p := newParent.(type) {
+	case *FSNode:
+		newParentNode = p
+	case *FSRoot:
+		newParentNode = &p.FSNode
+	default:
+		return syscall.EIO
+	}
 	newPath := newParentNode.newChild(newName).fsPath
 
 	if err := n.client.Mv(ctx, oldPath, newPath); err != nil {

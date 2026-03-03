@@ -302,12 +302,17 @@ func waitForMountpoint(mountpoint string, timeout time.Duration, mountedFn func(
 }
 
 func mountTableContains(mountpoint string) bool {
+	_, ok := mountTableEntry(mountpoint)
+	return ok
+}
+
+func mountTableEntry(mountpoint string) (string, bool) {
 	out, err := exec.Command("mount").Output()
 	if err == nil {
 		needle := " on " + mountpoint + " "
 		for _, ln := range strings.Split(string(out), "\n") {
 			if strings.Contains(ln, needle) {
-				return true
+				return ln, true
 			}
 		}
 	}
@@ -315,10 +320,15 @@ func mountTableContains(mountpoint string) bool {
 	if runtime.GOOS == "linux" {
 		b, err := os.ReadFile("/proc/mounts")
 		if err == nil {
-			return strings.Contains(string(b), " "+mountpoint+" ")
+			for _, ln := range strings.Split(string(b), "\n") {
+				fields := strings.Fields(ln)
+				if len(fields) >= 2 && fields[1] == mountpoint {
+					return ln, true
+				}
+			}
 		}
 	}
-	return false
+	return "", false
 }
 
 func filepathDir(p string) string {
