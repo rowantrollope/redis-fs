@@ -4,6 +4,7 @@
 *.dSYM/
 rfs
 mount/redis-fs-mount
+mount/redis-fs-nfs
 sandbox/sandbox
 sandbox/sandbox-cli
 
