@@ -10,6 +10,8 @@ This repository has three parts:
   for atomic operations (can be used as a performance/atomicity layer).
 - `mount/redis-fs-mount`: FUSE daemon that translates Linux file ops to
   Redis commands via the native Go client.
+- `mount/redis-fs-nfs`: NFS daemon (user-space) that serves Redis-FS over
+  NFSv3-compatible clients (including macOS built-in NFS client).
 - `rfs`: CLI orchestrator (recommended entrypoint) for bringing
   up Redis + mount daemons, status, teardown, and in-place migration.
 
@@ -86,7 +88,7 @@ For migrating an existing local directory in place:
 ## Project Layout
 
 - `module/Makefile`: builds `module/fs.so`.
-- `mount/Makefile`: builds `mount/redis-fs-mount`.
+- `mount/Makefile`: builds `mount/redis-fs-mount` and `mount/redis-fs-nfs`.
 - `cli/Makefile`: builds `rfs` (output to repo root).
 - root `Makefile`: orchestrator for all three.
 
@@ -107,9 +109,12 @@ If you want full manual control:
     # Start any Redis server (no module needed)
     redis-server --port 6379
 
-    # Mount
+    # Mount with FUSE (Linux)
     mkdir -p /tmp/mnt
     ./mount/redis-fs-mount --foreground myfs /tmp/mnt
+
+    # Serve over NFS (cross-platform clients, incl. macOS)
+    ./mount/redis-fs-nfs --redis localhost:6379 --export /myfs --listen 127.0.0.1:20490
 
     # Use it
     echo "Hello, World!" > /tmp/mnt/hello.txt

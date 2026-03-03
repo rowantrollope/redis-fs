@@ -5,9 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Test
 
 ```bash
-make                # build module/fs.so + mount/redis-fs-mount + rfs
+make                # build module/fs.so + mount/redis-fs-mount + mount/redis-fs-nfs + rfs
 make module         # build module/fs.so only
-make mount          # build mount/redis-fs-mount only
+make mount          # build mount/redis-fs-mount + mount/redis-fs-nfs
 make cli            # build rfs only
 make clean          # remove compiled artifacts
 

@@ -1,0 +1,20 @@
+949066:C 27 Feb 2026 21:01:06.445 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+949066:C 27 Feb 2026 21:01:06.445 # Redis version=7.0.15, bits=64, commit=00000000, modified=0, pid=949066, just started
+949066:C 27 Feb 2026 21:01:06.445 # Configuration loaded
+949066:M 27 Feb 2026 21:01:06.448 * monotonic clock: POSIX clock_gettime
+949066:M 27 Feb 2026 21:01:06.451 * Running mode=standalone, port=6399.
+949066:M 27 Feb 2026 21:01:06.451 # Server initialized
+949066:M 27 Feb 2026 21:01:06.451 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+949066:M 27 Feb 2026 21:01:06.455 * Module 'fs' loaded from /home/ubuntu/git/redis-fs/fs.so
+949066:M 27 Feb 2026 21:01:06.456 # Can't handle RDB format version 13
+949066:M 27 Feb 2026 21:01:06.456 # Fatal error loading the DB: Invalid argument. Exiting.
+949127:C 27 Feb 2026 21:01:09.772 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+949127:C 27 Feb 2026 21:01:09.772 # Redis version=7.0.15, bits=64, commit=00000000, modified=0, pid=949127, just started
+949127:C 27 Feb 2026 21:01:09.772 # Configuration loaded
+949127:M 27 Feb 2026 21:01:09.772 * monotonic clock: POSIX clock_gettime
+949127:M 27 Feb 2026 21:01:09.777 * Running mode=standalone, port=6399.
+949127:M 27 Feb 2026 21:01:09.777 # Server initialized
+949127:M 27 Feb 2026 21:01:09.777 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+949127:M 27 Feb 2026 21:01:09.778 * Module 'fs' loaded from /home/ubuntu/git/redis-fs/fs.so
+949127:M 27 Feb 2026 21:01:09.780 # Can't handle RDB format version 13
+949127:M 27 Feb 2026 21:01:09.780 # Fatal error loading the DB: Invalid argument. Exiting.

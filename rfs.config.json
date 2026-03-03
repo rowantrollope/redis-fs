@@ -1,15 +1,19 @@
 {
-  "useExistingRedis": false,
+  "useExistingRedis": true,
   "redisAddr": "localhost:6379",
   "redisPassword": "",
   "redisDB": 0,
   "redisKey": "memories",
   "mountpoint": "/home/ubuntu/memories",
+  "mountBackend": "auto",
   "readOnly": false,
   "allowOther": false,
   "redisServerBin": "/home/ubuntu/git/redis/src/redis-server",
   "modulePath": "/home/ubuntu/git/redis-fs/module/fs.so",
   "mountBin": "/home/ubuntu/git/redis-fs/mount/redis-fs-mount",
+  "nfsBin": "/home/ubuntu/git/redis-fs/mount/redis-fs-nfs",
+  "nfsHost": "127.0.0.1",
+  "nfsPort": 20490,
   "redisLog": "/tmp/rfs-redis.log",
   "mountLog": "/tmp/rfs-mount.log"
 }

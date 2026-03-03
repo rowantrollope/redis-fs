@@ -31,11 +31,15 @@ type config struct {
 	RedisDB          int    `json:"redisDB"`
 	RedisKey         string `json:"redisKey"`
 	Mountpoint       string `json:"mountpoint"`
+	MountBackend     string `json:"mountBackend"`
 	ReadOnly         bool   `json:"readOnly"`
 	AllowOther       bool   `json:"allowOther"`
 	RedisServerBin   string `json:"redisServerBin"`
 	ModulePath       string `json:"modulePath"`
 	MountBin         string `json:"mountBin"`
+	NFSBin           string `json:"nfsBin"`
+	NFSHost          string `json:"nfsHost"`
+	NFSPort          int    `json:"nfsPort"`
 	RedisLog         string `json:"redisLog"`
 	MountLog         string `json:"mountLog"`
 
@@ -51,6 +55,8 @@ type state struct {
 	RedisAddr      string    `json:"redis_addr"`
 	RedisDB        int       `json:"redis_db"`
 	MountPID       int       `json:"mount_pid"`
+	MountBackend   string    `json:"mount_backend"`
+	MountEndpoint  string    `json:"mount_endpoint,omitempty"`
 	Mountpoint     string    `json:"mountpoint"`
 	RedisKey       string    `json:"redis_key"`
 	RedisLog       string    `json:"redis_log"`
@@ -151,7 +157,7 @@ func cmdSetup() error {
 
 	fmt.Println("  " + clr(ansiDim, "Redis-FS stores an entire filesystem inside a single Redis"))
 	fmt.Println("  " + clr(ansiDim, "key. Files, directories, and metadata are kept in memory and"))
-	fmt.Println("  " + clr(ansiDim, "accessible via a FUSE mount on your local machine."))
+	fmt.Println("  " + clr(ansiDim, "accessible via a local mount on your machine."))
 	fmt.Println()
 	fmt.Println("  " + clr(ansiBold, "Let's get you set up."))
 	fmt.Println()
@@ -179,11 +185,14 @@ func cmdSetup() error {
 
 func runSetupWizard(r *bufio.Reader, out io.Writer) (config, string, error) {
 	cfg := config{
-		RedisAddr: "localhost:6379",
-		RedisDB:   0,
-		RedisKey:  "myfs",
-		RedisLog:  "/tmp/rfs-redis.log",
-		MountLog:  "/tmp/rfs-mount.log",
+		RedisAddr:    "localhost:6379",
+		RedisDB:      0,
+		RedisKey:     "myfs",
+		MountBackend: mountBackendAuto,
+		NFSHost:      "127.0.0.1",
+		NFSPort:      20490,
+		RedisLog:     "/tmp/rfs-redis.log",
+		MountLog:     "/tmp/rfs-mount.log",
 	}
 
 	// ── Redis connection ────────────────────────────────
@@ -265,8 +274,8 @@ func runSetupWizard(r *bufio.Reader, out io.Writer) (config, string, error) {
 		if !fi.IsDir() {
 			return cfg, "", fmt.Errorf("%s is not a directory", dir)
 		}
-		if isMounted(dir) {
-			return cfg, "", fmt.Errorf("%s is already a FUSE mountpoint", dir)
+		if mountTableContains(dir) {
+			return cfg, "", fmt.Errorf("%s is already a mountpoint", dir)
 		}
 		cfg.Mountpoint = dir
 		cfg.RedisKey = filepath.Base(dir)
@@ -281,6 +290,33 @@ func runSetupWizard(r *bufio.Reader, out io.Writer) (config, string, error) {
 		if err != nil {
 			return cfg, "", err
 		}
+	}
+
+	backendDef, err := normalizeMountBackend(cfg.MountBackend)
+	if err != nil {
+		return cfg, "", err
+	}
+	backendChoice, err := promptString(r, out,
+		"\n  Mount backend (auto, fuse, nfs)", backendDef)
+	if err != nil {
+		return cfg, "", err
+	}
+	cfg.MountBackend = backendChoice
+	if strings.EqualFold(strings.TrimSpace(backendChoice), mountBackendNFS) {
+		host, err := promptString(r, out, "\n  NFS host", cfg.NFSHost)
+		if err != nil {
+			return cfg, "", err
+		}
+		cfg.NFSHost = host
+		portStr, err := promptString(r, out, "\n  NFS port", strconv.Itoa(cfg.NFSPort))
+		if err != nil {
+			return cfg, "", err
+		}
+		port, err := strconv.Atoi(strings.TrimSpace(portStr))
+		if err != nil || port <= 0 {
+			return cfg, "", fmt.Errorf("invalid NFS port %q", portStr)
+		}
+		cfg.NFSPort = port
 	}
 
 	fmt.Fprintln(out)
@@ -334,9 +370,13 @@ func cmdDown() error {
 
 	fmt.Println()
 
-	if isMounted(st.Mountpoint) {
+	backend, _, err := backendForState(st)
+	if err != nil {
+		return err
+	}
+	if backend.IsMounted(st.Mountpoint) {
 		s := startStep("Unmounting filesystem")
-		if err := unmount(st.Mountpoint); err != nil {
+		if err := backend.Unmount(st.Mountpoint); err != nil {
 			s.fail(err.Error())
 			return fmt.Errorf("unmount %s: %w", st.Mountpoint, err)
 		}
@@ -380,7 +420,11 @@ func cmdStatus() error {
 		return err
 	}
 
-	mounted := isMounted(st.Mountpoint)
+	backend, backendName, err := backendForState(st)
+	if err != nil {
+		return err
+	}
+	mounted := backend.IsMounted(st.Mountpoint)
 	mountAlive := st.MountPID > 0 && processAlive(st.MountPID)
 
 	var title string
@@ -393,8 +437,12 @@ func cmdStatus() error {
 	rows := []boxRow{
 		{Label: "uptime", Value: formatDuration(time.Since(st.StartedAt))},
 		{Label: "mount", Value: st.Mountpoint},
+		{Label: "backend", Value: backendName},
 		{Label: "key", Value: st.RedisKey},
 		{Label: "redis", Value: fmt.Sprintf("%s (db %d)", st.RedisAddr, st.RedisDB)},
+	}
+	if st.MountEndpoint != "" {
+		rows = append(rows, boxRow{Label: "endpoint", Value: st.MountEndpoint})
 	}
 
 	if st.ManageRedis {
@@ -442,8 +490,8 @@ func cmdMigrate(args []string) error {
 	if !fi.IsDir() {
 		return fmt.Errorf("%s is not a directory", sourceDir)
 	}
-	if isMounted(sourceDir) {
-		return fmt.Errorf("%s is already a FUSE mountpoint", sourceDir)
+	if mountTableContains(sourceDir) {
+		return fmt.Errorf("%s is already a mountpoint", sourceDir)
 	}
 
 	cfg, err := loadConfig()
@@ -504,6 +552,10 @@ func startServices(cfg config) error {
 	s.succeed(cfg.RedisAddr)
 
 	fsClient := client.New(rdb, cfg.RedisKey)
+	backend, backendName, err := backendForConfig(cfg)
+	if err != nil {
+		return err
+	}
 
 	s = startStep("Mounting filesystem")
 	if err := os.MkdirAll(cfg.Mountpoint, 0o755); err != nil {
@@ -515,12 +567,12 @@ func startServices(cfg config) error {
 		return fmt.Errorf("failed to initialize key %q: %w", cfg.RedisKey, err)
 	}
 
-	mpid, err := startMountDaemon(cfg)
+	started, err := backend.Start(cfg)
 	if err != nil {
 		s.fail(err.Error())
 		return err
 	}
-	if err := waitForMount(cfg.Mountpoint, 6*time.Second); err != nil {
+	if err := backend.WaitForMount(cfg, started, 6*time.Second); err != nil {
 		s.fail("timeout")
 		return fmt.Errorf("mount did not become ready: %w", err)
 	}
@@ -531,7 +583,9 @@ func startServices(cfg config) error {
 		ManageRedis:    !cfg.UseExistingRedis,
 		RedisAddr:      cfg.RedisAddr,
 		RedisDB:        cfg.RedisDB,
-		MountPID:       mpid,
+		MountPID:       started.PID,
+		MountBackend:   backendName,
+		MountEndpoint:  started.Endpoint,
 		Mountpoint:     cfg.Mountpoint,
 		RedisKey:       cfg.RedisKey,
 		RedisLog:       cfg.RedisLog,
@@ -546,16 +600,20 @@ func startServices(cfg config) error {
 		return err
 	}
 
-	printReadyBox(cfg)
+	printReadyBox(cfg, backendName, started.Endpoint)
 	return nil
 }
 
-func printReadyBox(cfg config) {
+func printReadyBox(cfg config, backendName, endpoint string) {
 	title := clr(ansiBGreen, "●") + " " + clr(ansiBold, "redis-fs is ready")
 	rows := []boxRow{
 		{Label: "mount", Value: cfg.Mountpoint},
+		{Label: "backend", Value: backendName},
 		{Label: "key", Value: cfg.RedisKey},
 		{Label: "redis", Value: fmt.Sprintf("%s (db %d)", cfg.RedisAddr, cfg.RedisDB)},
+	}
+	if endpoint != "" {
+		rows = append(rows, boxRow{Label: "endpoint", Value: endpoint})
 	}
 	if cfg.ReadOnly {
 		rows = append(rows, boxRow{Label: "mode", Value: "read-only"})
@@ -622,6 +680,10 @@ func performMigration(cfg config, sourceDir string, r *bufio.Reader) error {
 	step.succeed(cfg.RedisAddr)
 
 	fsClient := client.New(rdb, cfg.RedisKey)
+	backend, backendName, err := backendForConfig(cfg)
+	if err != nil {
+		return err
+	}
 
 	exists := int64(0)
 	rootStat, err := fsClient.Stat(ctx, "/")
@@ -690,12 +752,12 @@ func performMigration(cfg config, sourceDir string, r *bufio.Reader) error {
 		return err
 	}
 
-	mpid, err := startMountDaemon(cfg)
+	started, err := backend.Start(cfg)
 	if err != nil {
 		step.fail(err.Error())
 		return err
 	}
-	if err := waitForMount(cfg.Mountpoint, 8*time.Second); err != nil {
+	if err := backend.WaitForMount(cfg, started, 8*time.Second); err != nil {
 		step.fail("timeout")
 		return err
 	}
@@ -707,7 +769,9 @@ func performMigration(cfg config, sourceDir string, r *bufio.Reader) error {
 		RedisPID:       redisPID,
 		RedisAddr:      cfg.RedisAddr,
 		RedisDB:        cfg.RedisDB,
-		MountPID:       mpid,
+		MountPID:       started.PID,
+		MountBackend:   backendName,
+		MountEndpoint:  started.Endpoint,
 		Mountpoint:     cfg.Mountpoint,
 		RedisKey:       cfg.RedisKey,
 		RedisLog:       cfg.RedisLog,
@@ -722,15 +786,20 @@ func performMigration(cfg config, sourceDir string, r *bufio.Reader) error {
 	rollback = false
 
 	title := clr(ansiBGreen, "●") + " " + clr(ansiBold, "migration complete")
-	printBox(title, []boxRow{
+	rows := []boxRow{
 		{Label: "archive", Value: archiveDir},
 		{Label: "mount", Value: cfg.Mountpoint},
+		{Label: "backend", Value: backendName},
 		{Label: "key", Value: cfg.RedisKey},
 		{},
 		{Label: "try", Value: clr(ansiCyan, "ls "+cfg.Mountpoint)},
 		{Label: "stop", Value: clr(ansiCyan, filepath.Base(os.Args[0])+" down")},
 		{Label: "config", Value: clr(ansiDim, configPath())},
-	})
+	}
+	if started.Endpoint != "" {
+		rows = append([]boxRow{{Label: "endpoint", Value: started.Endpoint}}, rows...)
+	}
+	printBox(title, rows)
 	return nil
 }
 
@@ -850,52 +919,6 @@ func startRedisDaemon(cfg config) (int, error) {
 	return 0, errors.New("redis started but pidfile was not found")
 }
 
-func startMountDaemon(cfg config) (int, error) {
-	if err := os.MkdirAll(filepath.Dir(cfg.MountLog), 0o755); err != nil {
-		return 0, err
-	}
-	f, err := os.OpenFile(cfg.MountLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return 0, err
-	}
-
-	args := []string{
-		"--redis", cfg.RedisAddr,
-		"--db", strconv.Itoa(cfg.RedisDB),
-		"--foreground",
-		cfg.RedisKey,
-		cfg.Mountpoint,
-	}
-	if cfg.RedisPassword != "" {
-		args = append([]string{"--password", cfg.RedisPassword}, args...)
-	}
-	if cfg.ReadOnly {
-		args = append([]string{"--readonly"}, args...)
-	}
-	if cfg.AllowOther {
-		args = append([]string{"--allow-other"}, args...)
-	}
-
-	cmd := exec.Command(cfg.MountBin, args...)
-	cmd.Stdout = f
-	cmd.Stderr = f
-	devNull, err := os.Open(os.DevNull)
-	if err == nil {
-		defer devNull.Close()
-		cmd.Stdin = devNull
-	}
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-
-	if err := cmd.Start(); err != nil {
-		_ = f.Close()
-		return 0, fmt.Errorf("start mount failed: %w", err)
-	}
-	pid := cmd.Process.Pid
-	_ = cmd.Process.Release()
-	_ = f.Close()
-	return pid, nil
-}
-
 func deleteNamespace(ctx context.Context, rdb *redis.Client, fsKey string) error {
 	pattern := "rfs:{" + fsKey + "}:*"
 	var cursor uint64
@@ -915,38 +938,6 @@ func deleteNamespace(ctx context.Context, rdb *redis.Client, fsKey string) error
 		}
 	}
 	return nil
-}
-
-func waitForMount(mountpoint string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if isMounted(mountpoint) {
-			return nil
-		}
-		time.Sleep(150 * time.Millisecond)
-	}
-	return errors.New("timeout waiting for mount")
-}
-
-func isMounted(mountpoint string) bool {
-	b, err := os.ReadFile("/proc/mounts")
-	if err != nil {
-		return false
-	}
-	return strings.Contains(string(b), " "+mountpoint+" ")
-}
-
-func unmount(mountpoint string) error {
-	for _, c := range [][]string{
-		{"fusermount", "-u", mountpoint},
-		{"fusermount", "-uz", mountpoint},
-		{"umount", "-l", mountpoint},
-	} {
-		if exec.Command(c[0], c[1:]...).Run() == nil {
-			return nil
-		}
-	}
-	return errors.New("all unmount commands failed")
 }
 
 func terminatePID(pid int, timeout time.Duration) error {
@@ -998,11 +989,14 @@ func saveConfig(cfg config) error {
 
 func loadConfig() (config, error) {
 	cfg := config{
-		RedisAddr: "localhost:6379",
-		RedisDB:   0,
-		RedisKey:  "myfs",
-		RedisLog:  "/tmp/rfs-redis.log",
-		MountLog:  "/tmp/rfs-mount.log",
+		RedisAddr:    "localhost:6379",
+		RedisDB:      0,
+		RedisKey:     "myfs",
+		MountBackend: mountBackendAuto,
+		NFSHost:      "127.0.0.1",
+		NFSPort:      20490,
+		RedisLog:     "/tmp/rfs-redis.log",
+		MountLog:     "/tmp/rfs-mount.log",
 	}
 	b, err := os.ReadFile(configPath())
 	if err != nil {
@@ -1025,16 +1019,43 @@ func resolveConfigPaths(cfg *config) error {
 		cfg.Mountpoint = mp
 	}
 
-	if cfg.MountBin == "" {
-		defMountBin := filepath.Join(dir, "mount", "redis-fs-mount")
-		if _, err := os.Stat(defMountBin); err != nil {
-			defMountBin = "redis-fs-mount"
+	backendName, err := normalizeMountBackend(cfg.MountBackend)
+	if err != nil {
+		return err
+	}
+	cfg.MountBackend = backendName
+
+	switch backendName {
+	case mountBackendFuse:
+		if cfg.MountBin == "" {
+			defMountBin := filepath.Join(dir, "mount", "redis-fs-mount")
+			if _, err := os.Stat(defMountBin); err != nil {
+				defMountBin = "redis-fs-mount"
+			}
+			resolved, err := resolveBinary(defMountBin)
+			if err != nil {
+				return fmt.Errorf("cannot find redis-fs-mount binary\n  Build it with: make mount")
+			}
+			cfg.MountBin = resolved
 		}
-		resolved, err := resolveBinary(defMountBin)
-		if err != nil {
-			return fmt.Errorf("cannot find redis-fs-mount binary\n  Build it with: make mount")
+	case mountBackendNFS:
+		if cfg.NFSHost == "" {
+			cfg.NFSHost = "127.0.0.1"
 		}
-		cfg.MountBin = resolved
+		if cfg.NFSPort <= 0 {
+			cfg.NFSPort = 20490
+		}
+		if cfg.NFSBin == "" {
+			defNFSBin := filepath.Join(dir, "mount", "redis-fs-nfs")
+			if _, err := os.Stat(defNFSBin); err != nil {
+				defNFSBin = "redis-fs-nfs"
+			}
+			resolved, err := resolveBinary(defNFSBin)
+			if err != nil {
+				return fmt.Errorf("cannot find redis-fs-nfs binary\n  Build it with: make mount")
+			}
+			cfg.NFSBin = resolved
+		}
 	}
 
 	if !cfg.UseExistingRedis {

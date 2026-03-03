@@ -1,0 +1,10 @@
+844489:C 27 Feb 2026 01:37:51.016 # oO0OoO0OoO0Oo Redis is starting oO0OoO0OoO0Oo
+844489:C 27 Feb 2026 01:37:51.016 # Redis version=7.0.15, bits=64, commit=00000000, modified=0, pid=844489, just started
+844489:C 27 Feb 2026 01:37:51.016 # Configuration loaded
+844489:M 27 Feb 2026 01:37:51.018 * monotonic clock: POSIX clock_gettime
+844489:M 27 Feb 2026 01:37:51.019 * Running mode=standalone, port=6380.
+844489:M 27 Feb 2026 01:37:51.021 # Server initialized
+844489:M 27 Feb 2026 01:37:51.021 # WARNING Memory overcommit must be enabled! Without it, a background save or replication may fail under low memory condition. Being disabled, it can can also cause failures without low memory condition, see https://github.com/jemalloc/jemalloc/issues/1328. To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and then reboot or run the command 'sysctl vm.overcommit_memory=1' for this to take effect.
+844489:M 27 Feb 2026 01:37:51.022 * Module 'fs' loaded from /home/ubuntu/git/redis-fs/fs.so
+844489:M 27 Feb 2026 01:37:51.023 # Can't handle RDB format version 13
+844489:M 27 Feb 2026 01:37:51.023 # Fatal error loading the DB: Invalid argument. Exiting.
