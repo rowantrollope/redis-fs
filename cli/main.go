@@ -303,20 +303,13 @@ func runSetupWizard(r *bufio.Reader, out io.Writer) (config, string, error) {
 	}
 	cfg.MountBackend = backendChoice
 	if strings.EqualFold(strings.TrimSpace(backendChoice), mountBackendNFS) {
-		host, err := promptString(r, out, "\n  NFS host", cfg.NFSHost)
-		if err != nil {
-			return cfg, "", err
+		if strings.TrimSpace(cfg.NFSHost) == "" {
+			cfg.NFSHost = "127.0.0.1"
 		}
-		cfg.NFSHost = host
-		portStr, err := promptString(r, out, "\n  NFS port", strconv.Itoa(cfg.NFSPort))
-		if err != nil {
-			return cfg, "", err
+		if cfg.NFSPort <= 0 {
+			cfg.NFSPort = 20490
 		}
-		port, err := strconv.Atoi(strings.TrimSpace(portStr))
-		if err != nil || port <= 0 {
-			return cfg, "", fmt.Errorf("invalid NFS port %q", portStr)
-		}
-		cfg.NFSPort = port
+		fmt.Fprintln(out, "  "+clr(ansiDim, "Using default NFS endpoint "+cfg.NFSHost+":"+strconv.Itoa(cfg.NFSPort)+" (edit config to change)"))
 	}
 
 	fmt.Fprintln(out)

@@ -10,12 +10,42 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/go-git/go-billy/v5"
 	"github.com/redis-fs/mount/internal/client"
 	"github.com/redis-fs/mount/internal/nfsfs"
 	"github.com/redis/go-redis/v9"
 	"github.com/willscott/go-nfs"
 	"github.com/willscott/go-nfs/helpers"
 )
+
+type authCompatHandler struct {
+	nfs.Handler
+}
+
+func (h authCompatHandler) Mount(ctx context.Context, conn net.Conn, req nfs.MountRequest) (nfs.MountStatus, billy.Filesystem, []nfs.AuthFlavor) {
+	status, fs, flavors := h.Handler.Mount(ctx, conn, req)
+	if status != nfs.MountStatusOk {
+		return status, fs, flavors
+	}
+
+	hasNull := false
+	hasUnix := false
+	for _, fl := range flavors {
+		if fl == nfs.AuthFlavorNull {
+			hasNull = true
+		}
+		if fl == nfs.AuthFlavorUnix {
+			hasUnix = true
+		}
+	}
+	if !hasUnix {
+		flavors = append(flavors, nfs.AuthFlavorUnix)
+	}
+	if !hasNull {
+		flavors = append(flavors, nfs.AuthFlavorNull)
+	}
+	return status, fs, flavors
+}
 
 func main() {
 	redisAddr := flag.String("redis", "localhost:6379", "Redis server address")
@@ -65,7 +95,10 @@ func main() {
 	defer listener.Close()
 
 	fs := nfsfs.New(c, *readOnly)
-	handler := helpers.NewNullAuthHandler(fs)
+	baseHandler := helpers.NewNullAuthHandler(fs)
+	// go-nfs expects stable non-empty file handles for client mount handshakes.
+	// Wrapping with CachingHandler provides ToHandle/FromHandle mapping.
+	handler := authCompatHandler{Handler: helpers.NewCachingHandler(baseHandler, 1024)}
 
 	log.Printf("Serving Redis key %q via NFS at %s", redisKey, *listenAddr)
 	log.Printf("Export path: %s", exp)

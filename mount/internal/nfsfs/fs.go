@@ -17,6 +17,7 @@ import (
 )
 
 var _ billy.Filesystem = (*FS)(nil)
+var _ billy.Change = (*FS)(nil)
 
 type FS struct {
 	client   client.Client
@@ -232,6 +233,38 @@ func (f *FS) Chroot(string) (billy.Filesystem, error) {
 }
 
 func (f *FS) Root() string { return "/" }
+
+func (f *FS) Chmod(name string, mode os.FileMode) error {
+	if f.readOnly {
+		return os.ErrPermission
+	}
+	ctx, cancel := f.withTimeout()
+	defer cancel()
+	return f.client.Chmod(ctx, f.normalize(name), uint32(mode.Perm()))
+}
+
+func (f *FS) Lchown(name string, uid, gid int) error {
+	// Redis-FS stores ownership per path; symlink-vs-target semantics are not distinguished.
+	return f.Chown(name, uid, gid)
+}
+
+func (f *FS) Chown(name string, uid, gid int) error {
+	if f.readOnly {
+		return os.ErrPermission
+	}
+	ctx, cancel := f.withTimeout()
+	defer cancel()
+	return f.client.Chown(ctx, f.normalize(name), uint32(uid), uint32(gid))
+}
+
+func (f *FS) Chtimes(name string, atime time.Time, mtime time.Time) error {
+	if f.readOnly {
+		return os.ErrPermission
+	}
+	ctx, cancel := f.withTimeout()
+	defer cancel()
+	return f.client.Utimens(ctx, f.normalize(name), atime.UnixMilli(), mtime.UnixMilli())
+}
 
 type fileInfo struct {
 	name string
